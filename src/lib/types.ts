@@ -9,16 +9,17 @@ export type ChordEvent = {
   symbol: string; // e.g. "G", "A", "Bm7/F#"
 };
 
+// NEW: anchors are by character index in lyrics (caret-based)
 export type LyricAnchor = {
   id: string;
-  tokenIndex: number; // which word/token in the lyric block
+  charIndex: number; // 0..lyrics.length
   cell: number; // absolute cell index (same timeline as chords)
 };
 
 export type Section = {
   id: string;
   name: string; // "Verse 1", "Chorus", etc.
-  lyrics: string; // raw text (free-flow unless anchored)
+  lyrics: string; // raw text
   chords: ChordEvent[];
   anchors: LyricAnchor[];
 };
@@ -27,6 +28,10 @@ export type LeadSheetDoc = {
   version: 1;
   title: string;
   artist?: string;
+
+  originalKey: string; // the real key of the song
+  displayKey: string; // the key you want to print/play in
+
   timeSignature: TimeSignature;
   subdivision: number; // cells per beat (1=beats, 2=8ths in 4/4, etc.)
   sections: Section[];
