@@ -4,10 +4,30 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LeadSheetDoc, ChordEvent, LyricAnchor } from "@/lib/types";
 import { downloadJson, readJsonFile } from "@/lib/io";
 import { parseChordInput } from "@/lib/chordInput";
-import { semitoneDelta, transposeChordSymbol, KEY_TO_STYLE } from "@/lib/transpose";
+import {
+  semitoneDelta,
+  transposeChordSymbol,
+  KEY_TO_STYLE,
+} from "@/lib/transpose";
 import { LeadSheetGrid } from "@/components/LeadSheetGrid";
 
-const KEYS = ["C","G","D","A","E","B","F#","C#","F","Bb","Eb","Ab","Db","Gb","Cb"];
+const KEYS = [
+  "C",
+  "G",
+  "D",
+  "A",
+  "E",
+  "B",
+  "F#",
+  "C#",
+  "F",
+  "Bb",
+  "Eb",
+  "Ab",
+  "Db",
+  "Gb",
+  "Cb",
+];
 
 function newDoc(): LeadSheetDoc {
   return {
@@ -24,11 +44,20 @@ function newDoc(): LeadSheetDoc {
   };
 }
 
+function scaleCell(n: number, oldSub: number, nextSub: number) {
+  if (!Number.isFinite(n)) return 0;
+  if (oldSub <= 0 || nextSub <= 0) return Math.round(n);
+  // keep the same beat position: beat = cell / oldSub -> newCell = beat * nextSub
+  return Math.round((n / oldSub) * nextSub);
+}
+
 export default function Home() {
   const [doc, setDoc] = useState<LeadSheetDoc>(() => newDoc());
   const [lastLoaded, setLastLoaded] = useState<string>("");
   const [chordInput, setChordInput] = useState<string>("G:2 A:1 B:1");
-  const [selectedCharIndex, setSelectedCharIndex] = useState<number | null>(null);
+  const [selectedCharIndex, setSelectedCharIndex] = useState<number | null>(
+    null
+  );
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -72,7 +101,7 @@ export default function Home() {
   function addAnchor(charIndex: number, cell: number) {
     const clamped = Math.max(0, Math.min(charIndex, section.lyrics.length));
 
-    // Replace existing anchor for same word (friendlier)
+    // Replace existing anchor for same token-start (friendlier)
     const filtered = section.anchors.filter((a) => a.charIndex !== clamped);
 
     const nextAnchor: LyricAnchor = {
@@ -81,7 +110,9 @@ export default function Home() {
       cell,
     };
 
-    const nextAnchors = [...filtered, nextAnchor].sort((a, b) => a.cell - b.cell);
+    const nextAnchors = [...filtered, nextAnchor].sort(
+      (a, b) => a.cell - b.cell
+    );
 
     setDoc({
       ...doc,
@@ -102,6 +133,30 @@ export default function Home() {
     setDoc({
       ...doc,
       sections: [{ ...section, anchors: nextAnchors }],
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  function setSubdivision(nextSubRaw: number) {
+    const nextSub = Math.max(1, Math.floor(Number(nextSubRaw || 1)));
+    const oldSub = doc.subdivision;
+
+    if (nextSub === oldSub) return;
+
+    const nextChords = section.chords.map((c) => ({
+      ...c,
+      cell: scaleCell(c.cell, oldSub, nextSub),
+    }));
+
+    const nextAnchors = section.anchors.map((a) => ({
+      ...a,
+      cell: scaleCell(a.cell, oldSub, nextSub),
+    }));
+
+    setDoc({
+      ...doc,
+      subdivision: nextSub,
+      sections: [{ ...section, chords: nextChords, anchors: nextAnchors }],
       updatedAt: new Date().toISOString(),
     });
   }
@@ -153,21 +208,41 @@ export default function Home() {
         <input
           value={doc.title}
           onChange={(e) =>
-            setDoc({ ...doc, title: e.target.value, updatedAt: new Date().toISOString() })
+            setDoc({
+              ...doc,
+              title: e.target.value,
+              updatedAt: new Date().toISOString(),
+            })
           }
         />
       </label>
 
-      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 16,
+          alignItems: "center",
+          marginBottom: 12,
+          flexWrap: "wrap",
+        }}
+      >
         <label>
           Original key:{" "}
           <select
             value={doc.originalKey}
             onChange={(e) =>
-              setDoc({ ...doc, originalKey: e.target.value, updatedAt: new Date().toISOString() })
+              setDoc({
+                ...doc,
+                originalKey: e.target.value,
+                updatedAt: new Date().toISOString(),
+              })
             }
           >
-            {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+            {KEYS.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
           </select>
         </label>
 
@@ -176,38 +251,65 @@ export default function Home() {
           <select
             value={doc.displayKey}
             onChange={(e) =>
-              setDoc({ ...doc, displayKey: e.target.value, updatedAt: new Date().toISOString() })
+              setDoc({
+                ...doc,
+                displayKey: e.target.value,
+                updatedAt: new Date().toISOString(),
+              })
             }
           >
-            {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+            {KEYS.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
           </select>
         </label>
 
         <span style={{ opacity: 0.75 }}>(transpose: +{delta} semitones)</span>
       </div>
 
-      <label style={{ display: "block", marginBottom: 12 }}>
-        Beats per bar:{" "}
-        <input
-          type="number"
-          min={1}
-          value={doc.timeSignature.beatsPerBar}
-          onChange={(e) =>
-            setDoc({
-              ...doc,
-              timeSignature: {
-                ...doc.timeSignature,
-                beatsPerBar: Math.max(1, Number(e.target.value || 4)),
-              },
-              updatedAt: new Date().toISOString(),
-            })
-          }
-          style={{ width: 80 }}
-        />
-      </label>
+      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12 }}>
+        <label>
+          Beats per bar:{" "}
+          <input
+            type="number"
+            min={1}
+            value={doc.timeSignature.beatsPerBar}
+            onChange={(e) =>
+              setDoc({
+                ...doc,
+                timeSignature: {
+                  ...doc.timeSignature,
+                  beatsPerBar: Math.max(1, Number(e.target.value || 4)),
+                },
+                updatedAt: new Date().toISOString(),
+              })
+            }
+            style={{ width: 80 }}
+          />
+        </label>
+
+        <label>
+          Subdivision (cells per beat):{" "}
+          <input
+            type="number"
+            min={1}
+            value={doc.subdivision}
+            onChange={(e) => setSubdivision(Number(e.target.value))}
+            style={{ width: 80 }}
+          />
+        </label>
+
+        <span style={{ opacity: 0.75 }}>
+          (1 = beats, 2 = eighths, 4 = sixteenths…)
+        </span>
+      </div>
 
       <div style={{ marginBottom: 16 }}>
-        <label style={{ display: "block", marginBottom: 6 }}>Chords (beats):</label>
+        <label style={{ display: "block", marginBottom: 6 }}>
+          Chords (beats):
+        </label>
         <input
           style={{ width: "100%", fontFamily: "monospace" }}
           value={chordInput}
@@ -240,8 +342,12 @@ export default function Home() {
             fontFamily: "system-ui",
           }}
         />
-        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-          <button type="button" onClick={undoLastAnchor} disabled={!section.anchors.length}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={undoLastAnchor}
+            disabled={!section.anchors.length}
+          >
             Undo last anchor
           </button>
           <span style={{ opacity: 0.8 }}>
@@ -253,12 +359,13 @@ export default function Home() {
           {selectedCharIndex !== null ? (
             <span style={{ opacity: 0.9 }}>Word selected — now click a beat.</span>
           ) : (
-            <span style={{ opacity: 0.75 }}>Select a word under a system, then click a beat.</span>
+            <span style={{ opacity: 0.75 }}>
+              Select a word under a system, then click a beat.
+            </span>
           )}
         </div>
       </div>
 
-      {/* Systems with lyric lines UNDER them */}
       <LeadSheetGrid
         chords={displayChords}
         timeSignature={doc.timeSignature}

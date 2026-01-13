@@ -5,8 +5,6 @@ type Props = {
   chords: ChordEvent[];
   timeSignature: TimeSignature;
   subdivision: number;
-
-  // NEW: make beats clickable (optional)
   onBeatClick?: (absoluteCell: number) => void;
 };
 
@@ -16,22 +14,17 @@ type Segment = {
   beats: number;
 };
 
-export function BarChordPreview({
-  chords,
-  timeSignature,
-  subdivision,
-  onBeatClick,
-}: Props) {
+export function BarChordPreview({ chords, timeSignature, subdivision, onBeatClick }: Props) {
   const beatsPerBar = timeSignature.beatsPerBar;
   const barCells = beatsPerBar * subdivision;
 
-  if (!chords.length || barCells <= 0) return null;
+  if (barCells <= 0) return null;
 
   const sorted = [...chords]
     .filter((c) => Number.isFinite(c.cell) && c.cell >= 0)
     .sort((a, b) => a.cell - b.cell);
 
-  const lastCell = sorted[sorted.length - 1].cell;
+  const lastCell = sorted.length ? sorted[sorted.length - 1].cell : 0;
   const totalBars = Math.max(1, Math.floor(lastCell / barCells) + 1);
 
   const bars: { barIndex: number; segments: Segment[] }[] = [];
@@ -41,8 +34,8 @@ export function BarChordPreview({
     const barEnd = barStart + barCells;
 
     const inBar = sorted.filter((c) => c.cell >= barStart && c.cell < barEnd);
-    if (inBar.length === 0) continue;
 
+    // include empty bars
     const segments: Segment[] = inBar.map((c, i) => {
       const start = c.cell;
       const nextStart = i + 1 < inBar.length ? inBar[i + 1].cell : barEnd;
@@ -61,25 +54,18 @@ export function BarChordPreview({
 
   return (
     <div>
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 16,
-          alignItems: "flex-start",
-        }}
-      >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
         {bars.map(({ barIndex, segments }) => {
+          const hasAnyChords = segments.length > 0;
           const singleFullBar =
-            segments.length === 1 && nearlyEqual(segments[0].beats, beatsPerBar);
+            hasAnyChords && segments.length === 1 && nearlyEqual(segments[0].beats, beatsPerBar);
 
           const beatsList = segments.map((s) => s.beats);
           const evenlyDivided =
-            beatsList.length > 1 &&
-            beatsList.every((b) => nearlyEqual(b, beatsList[0]));
+            hasAnyChords && beatsList.length > 1 && beatsList.every((b) => nearlyEqual(b, beatsList[0]));
 
-          const showTicks = !singleFullBar && !evenlyDivided;
-          const showUnderline = segments.length > 1;
+          const showTicks = hasAnyChords && !singleFullBar && !evenlyDivided;
+          const showUnderline = hasAnyChords && segments.length > 1;
 
           const barStartAbs = barIndex * barCells;
 
@@ -100,56 +86,91 @@ export function BarChordPreview({
                   overflow: "hidden",
                 }}
               >
-                {/* Clickable beat overlay */}
-                {onBeatClick ? (
+                {subdivision > 1 ? (
                   <div
                     style={{
                       position: "absolute",
-                      inset: 12,
+                      left: 12,
+                      right: 12,
+                      top: 2,
+                      height: 14,
                       display: "grid",
-                      gridTemplateColumns: `repeat(${beatsPerBar}, 1fr)`,
-                      zIndex: 5,
+                      gridTemplateColumns: `repeat(${barCells}, 1fr)`,
+                      pointerEvents: "none",
+                      zIndex: 6,
+                      fontSize: 11,
+                      opacity: 0.55,
+                      color: "rgba(255,255,255,0.9)",
                     }}
                   >
-                    {Array.from({ length: beatsPerBar }).map((_, beatIdx) => (
-                      <button
-                        key={beatIdx}
-                        type="button"
-                        title={`Beat ${beatIdx + 1}`}
-                        onClick={() => onBeatClick(barStartAbs + beatIdx * subdivision)}
-                        style={{
-                          background: "transparent",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      />
-                    ))}
+                    {Array.from({ length: barCells }).map((_, cellIdx) => {
+                      const beatNumber = Math.floor(cellIdx / subdivision) + 1;
+                      const sub = cellIdx % subdivision;
+                      const text = sub === 0 ? String(beatNumber) : "&";
+                      return (
+                        <div key={cellIdx} style={{ textAlign: "center" }}>
+                          {text}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
 
-                {/* Beat grid lines */}
-                <div
-                  style={{
-                    position: "absolute",
-                    inset: 12,
-                    display: "grid",
-                    gridTemplateColumns: `repeat(${beatsPerBar}, 1fr)`,
-                    pointerEvents: "none",
-                    zIndex: 1,
-                  }}
-                >
-                  {Array.from({ length: beatsPerBar }).map((_, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        borderLeft:
-                          i === 0 ? "none" : "1px solid rgba(255,255,255,0.12)",
-                      }}
-                    />
-                  ))}
+                <div style={{ position: "absolute", inset: 12, pointerEvents: "none", zIndex: 1 }}>
+                  {Array.from({ length: barCells }).map((_, cellIdx) => {
+                    if (cellIdx === 0) return null;
+                    const isBeatLine = cellIdx % subdivision === 0;
+                    return (
+                      <div
+                        key={cellIdx}
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          bottom: 0,
+                          left: `${(cellIdx / barCells) * 100}%`,
+                          width: 1,
+                          background: isBeatLine
+                            ? "rgba(255,255,255,0.18)"
+                            : "rgba(255,255,255,0.10)",
+                        }}
+                      />
+                    );
+                  })}
                 </div>
 
-                {/* Underline */}
+                {onBeatClick ? (
+                  <div style={{ position: "absolute", inset: 12, zIndex: 5 }}>
+                    {Array.from({ length: barCells }).map((_, cellIdx) => {
+                      const leftPct = (cellIdx / barCells) * 100;
+                      const widthPct = (1 / barCells) * 100;
+
+                      const beatNumber = Math.floor(cellIdx / subdivision) + 1;
+                      const sub = cellIdx % subdivision;
+                      const label =
+                        subdivision === 1 ? `${beatNumber}` : sub === 0 ? `${beatNumber}` : "&";
+
+                      return (
+                        <button
+                          key={cellIdx}
+                          type="button"
+                          title={`Beat ${label}`}
+                          onClick={() => onBeatClick(barStartAbs + cellIdx)}
+                          style={{
+                            position: "absolute",
+                            top: 0,
+                            bottom: 0,
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            background: "transparent",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : null}
+
                 {showUnderline ? (
                   <div
                     style={{
@@ -165,7 +186,6 @@ export function BarChordPreview({
                   />
                 ) : null}
 
-                {/* Chords + ticks */}
                 {segments.map((seg, idx) => {
                   const leftPct = (seg.startCellInBar / barCells) * 100;
                   const tickCount = Math.max(1, Math.round(seg.beats));
@@ -199,9 +219,7 @@ export function BarChordPreview({
                         <div style={{ height: 24 }} />
                       )}
 
-                      <div style={{ fontSize: 26, lineHeight: "28px" }}>
-                        {seg.symbol}
-                      </div>
+                      <div style={{ fontSize: 26, lineHeight: "28px" }}>{seg.symbol}</div>
                     </div>
                   );
                 })}
