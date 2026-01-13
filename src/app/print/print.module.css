@@ -1,0 +1,76 @@
+/* src/app/print/print.module.css */
+
+.page {
+  background: #f4f4f4;
+  min-height: 100vh;
+  padding: 24px;
+  color: #111;
+  font-family: system-ui;
+}
+
+.sheet {
+  /* preview */
+  max-width: 980px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.meta {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+@media print {
+  /* make the page itself a centering container */
+  .page {
+    background: #fff !important;
+    padding: 0 !important;
+    min-height: 100vh !important;
+
+    display: flex !important;
+    align-items: center !important;    /* vertical centering */
+    justify-content: center !important; /* horizontal centering */
+  }
+
+  .controls {
+    display: none !important;
+  }
+
+  .sheet {
+    /* a “safe” width inside A4 printable area */
+    width: 180mm;
+    margin: 0 auto !important;
+
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+  }
+
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+}

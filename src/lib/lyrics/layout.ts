@@ -1,24 +1,16 @@
 // src/lib/lyrics/layout.ts
-
 import type { LyricAnchor } from "@/lib/types";
-import { LYRIC_METRICS } from "./metrics";
-import type { LyricToken } from "./tokens";
-import { estWidthOfToken } from "./tokens";
+import type { LyricToken } from "@/lib/lyrics/tokens";
+import { LYRIC_METRICS } from "@/lib/lyrics/metrics";
+
+function nearlyEqual(a: number, b: number) {
+  return Math.abs(a - b) < 1e-9;
+}
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-/**
- * Even-spread ONLY between anchors.
- * - Outside anchor spans: normal linear flow
- *
- * RULE:
- * If there are anchors in this system, DO NOT apply a global shift that would move anchored tokens.
- * We allow overflow to be handled by pushing tokens to next system.
- *
- * Hyphen centering: hyphen token is centered between adjacent word tokens.
- */
 export function layoutOnlyBetweenAnchors(args: {
   tokens: LyricToken[];
   anchors: LyricAnchor[];
@@ -29,19 +21,30 @@ export function layoutOnlyBetweenAnchors(args: {
 }) {
   const { tokens, anchors, systemStartCell, systemBeats, subdivision, systemWidthPx } = args;
 
-  // default linear
+  function widthOf(t: LyricToken) {
+    if (t.kind === "hyphen") return LYRIC_METRICS.hyphenPx;
+    return t.text.length * LYRIC_METRICS.charPx + LYRIC_METRICS.padPx;
+  }
+
+  // Default linear positions
   const xPos: number[] = [];
   let cursor = 0;
   for (let i = 0; i < tokens.length; i++) {
     xPos[i] = cursor;
-    cursor += estWidthOfToken(tokens[i]) + LYRIC_METRICS.gapPx;
+    cursor += widthOf(tokens[i]) + LYRIC_METRICS.gapPx;
   }
 
-  // anchor points
+  // Map charIndex -> token index (WORD tokens only)
+  const tokenIndexByCharIndex = new Map<number, number>();
+  tokens.forEach((t, idx) => {
+    if (t.kind === "word") tokenIndexByCharIndex.set(t.charIndex, idx);
+  });
+
+  // Anchor points local to this system
   const anchorPoints: { i: number; x: number }[] = [];
   for (const a of anchors) {
-    const localIndex = tokens.findIndex((t) => t.kind === "word" && t.charIndex === a.charIndex);
-    if (localIndex === -1) continue;
+    const localIndex = tokenIndexByCharIndex.get(a.charIndex);
+    if (localIndex === undefined) continue;
 
     const beat = (a.cell - systemStartCell) / subdivision;
     const beatClamped = clamp(beat, 0, systemBeats);
@@ -49,13 +52,16 @@ export function layoutOnlyBetweenAnchors(args: {
 
     anchorPoints.push({ i: localIndex, x });
   }
+
   anchorPoints.sort((a, b) => (a.i - b.i) || (a.x - b.x));
 
+  const anchoredIndex = new Set<number>(anchorPoints.map((p) => p.i));
+
   if (anchorPoints.length >= 1) {
-    // snap anchored
+    // Snap anchored tokens to their x (hard constraint)
     for (const ap of anchorPoints) xPos[ap.i] = ap.x;
 
-    // even-spread between anchors
+    // Even-spread ONLY between consecutive anchors
     for (let k = 0; k < anchorPoints.length - 1; k++) {
       const a = anchorPoints[k];
       const b = anchorPoints[k + 1];
@@ -68,62 +74,49 @@ export function layoutOnlyBetweenAnchors(args: {
       }
     }
 
-    // non-overlap forward pass
+    // HARD-CONSTRAINT collision handling:
+    // - Never move anchored tokens
+    // - If a non-anchored token would overlap an anchored token, push the non-anchored token left (backward)
+    // - Otherwise do a forward non-overlap pass that skips anchored positions
     for (let i = 1; i < tokens.length; i++) {
-      const minX = xPos[i - 1] + estWidthOfToken(tokens[i - 1]) + LYRIC_METRICS.gapPx;
+      const minX = xPos[i - 1] + widthOf(tokens[i - 1]) + LYRIC_METRICS.gapPx;
+
+      if (anchoredIndex.has(i)) {
+        // anchored token: keep it fixed; if previous overlaps, pull previous left (backward ripple)
+        if (minX > xPos[i]) {
+          let j = i - 1;
+          while (j >= 0) {
+            const maxRight = xPos[j] + widthOf(tokens[j]);
+            const allowedRight = xPos[j + 1] - LYRIC_METRICS.gapPx;
+            const newX = allowedRight - widthOf(tokens[j]);
+
+            if (maxRight + LYRIC_METRICS.gapPx <= xPos[j + 1] || nearlyEqual(xPos[j], newX)) {
+              break;
+            }
+
+            xPos[j] = Math.min(xPos[j], newX);
+            j--;
+            if (j >= 0 && anchoredIndex.has(j)) break; // never move anchors
+          }
+        }
+        continue;
+      }
+
+      // non-anchored token: regular forward non-overlap
       if (xPos[i] < minX) xPos[i] = minX;
     }
-
-    // hyphen centering pass
-    for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i].kind !== "hyphen") continue;
-      const prev = i - 1;
-      const next = i + 1;
-      if (prev < 0 || next >= tokens.length) continue;
-      if (tokens[prev].kind !== "word" || tokens[next].kind !== "word") continue;
-
-      const prevRight = xPos[prev] + estWidthOfToken(tokens[prev]);
-      const nextLeft = xPos[next];
-      const mid = (prevRight + nextLeft) / 2;
-      xPos[i] = mid - estWidthOfToken(tokens[i]) / 2;
-    }
-
-    // DO NOT shift when anchored
-    return tokens.map((t, i) => ({ token: t, x: xPos[i] }));
   }
 
-  // unanchored: shift to fit if possible
-  if (!tokens.length) return [];
-
+  // Clamp into view by shifting whole line (does NOT alter relative anchor positions)
   const minLeft = Math.min(...xPos);
-  const maxRight = Math.max(...xPos.map((x, i) => x + estWidthOfToken(tokens[i])));
-  const contentWidth = maxRight - minLeft;
+  const maxRight = Math.max(...xPos.map((x, i) => x + widthOf(tokens[i])));
 
-  let shift = -minLeft;
-  if (contentWidth > systemWidthPx) {
-    // can't fit; just normalize left
-    shift = -minLeft;
-  } else {
-    // fits: ensure right edge also fits
-    const maxShift = systemWidthPx - maxRight;
-    if (shift > maxShift) shift = maxShift;
+  let shift = 0;
+  if (minLeft < 0) shift = -minLeft;
+  if (maxRight + shift > systemWidthPx) {
+    const overflow = maxRight + shift - systemWidthPx;
+    shift = Math.max(0, shift - overflow);
   }
 
-  const shifted = xPos.map((x) => x + shift);
-
-  // hyphen centering in unanchored mode
-  for (let i = 0; i < tokens.length; i++) {
-    if (tokens[i].kind !== "hyphen") continue;
-    const prev = i - 1;
-    const next = i + 1;
-    if (prev < 0 || next >= tokens.length) continue;
-    if (tokens[prev].kind !== "word" || tokens[next].kind !== "word") continue;
-
-    const prevRight = shifted[prev] + estWidthOfToken(tokens[prev]);
-    const nextLeft = shifted[next];
-    const mid = (prevRight + nextLeft) / 2;
-    shifted[i] = mid - estWidthOfToken(tokens[i]) / 2;
-  }
-
-  return tokens.map((t, i) => ({ token: t, x: shifted[i] }));
+  return tokens.map((t, i) => ({ token: t, x: xPos[i] + shift }));
 }
