@@ -1,6 +1,16 @@
 // src/components/LeadSheetGrid.tsx
+
 import React, { useMemo } from "react";
 import type { ChordEvent, LyricAnchor, TimeSignature } from "@/lib/types";
+
+import { LYRIC_METRICS } from "@/lib/lyrics/metrics";
+import { tokenizeAllLyrics, estWidthOfToken, type LyricToken } from "@/lib/lyrics/tokens";
+import { layoutOnlyBetweenAnchors } from "@/lib/lyrics/layout";
+import {
+  buildAnchorsBySystem,
+  chunkTokensForwardOnly,
+  reflowOverflowAcrossSystems,
+} from "@/lib/lyrics/chunking";
 
 type Segment = {
   symbol: string;
@@ -13,270 +23,8 @@ type BarModel = {
   segments: Segment[];
 };
 
-type Token =
-  | { kind: "word"; text: string; charIndex: number }
-  | { kind: "hyphen"; text: "-"; charIndex: number };
-
-type Range = { start: number; end: number }; // [start, end)
-
 function nearlyEqual(a: number, b: number) {
   return Math.abs(a - b) < 1e-9;
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
-/**
- * IMPORTANT: These widths must roughly match the actual rendered buttons
- * in the lyric line, otherwise chunking will think everything fits on line 1.
- */
-const METRICS = {
-  // Approx monospace glyph width at fontSize 14 (rough)
-  charPx: 9,
-  // Button horizontal padding (8+8) + border (~2) + a little fudge
-  padPx: 20,
-  // Space between tokens
-  gapPx: 10,
-  // Hyphen token width fudge
-  hyphenPx: 14,
-};
-
-/**
- * Tokenize ALL lyrics as one continuous stream.
- * - Newlines become whitespace (continuous)
- * - Words split by whitespace
- * - Hyphenated words split into word/hyphen/word tokens with accurate indices
- */
-function tokenizeAllLyrics(lyrics: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-
-  while (i < lyrics.length) {
-    while (i < lyrics.length && /\s/.test(lyrics[i])) i++;
-    if (i >= lyrics.length) break;
-
-    const wordStart = i;
-    while (i < lyrics.length && !/\s/.test(lyrics[i])) i++;
-    const word = lyrics.slice(wordStart, i);
-    const absStart = wordStart;
-
-    if (!word.includes("-")) {
-      tokens.push({ kind: "word", text: word, charIndex: absStart });
-      continue;
-    }
-
-    let local = 0;
-    while (local < word.length) {
-      const dash = word.indexOf("-", local);
-      if (dash === -1) {
-        const part = word.slice(local);
-        if (part.length) {
-          tokens.push({ kind: "word", text: part, charIndex: absStart + local });
-        }
-        break;
-      }
-
-      const left = word.slice(local, dash);
-      if (left.length) {
-        tokens.push({ kind: "word", text: left, charIndex: absStart + local });
-      }
-
-      tokens.push({ kind: "hyphen", text: "-", charIndex: absStart + dash });
-
-      local = dash + 1;
-      if (local >= word.length) break;
-    }
-  }
-
-  return tokens;
-}
-
-function estWidthOfToken(t: Token) {
-  if (t.kind === "hyphen") return METRICS.hyphenPx;
-  return t.text.length * METRICS.charPx + METRICS.padPx;
-}
-
-/**
- * Even-spread ONLY between anchors.
- * - Outside anchor spans: normal linear flow
- */
-function layoutOnlyBetweenAnchors(args: {
-  tokens: Token[];
-  anchors: LyricAnchor[];
-  systemStartCell: number;
-  systemBeats: number;
-  subdivision: number;
-  systemWidthPx: number;
-}) {
-  const { tokens, anchors, systemStartCell, systemBeats, subdivision, systemWidthPx } = args;
-
-  function widthOf(t: Token) {
-    return estWidthOfToken(t);
-  }
-
-  // Default linear positions
-  const xPos: number[] = [];
-  let cursor = 0;
-  for (let i = 0; i < tokens.length; i++) {
-    xPos[i] = cursor;
-    cursor += widthOf(tokens[i]) + METRICS.gapPx;
-  }
-
-  // Anchor points local to this system's token list
-  const anchorPoints: { i: number; x: number }[] = [];
-  for (const a of anchors) {
-    const localIndex = tokens.findIndex((t) => t.kind === "word" && t.charIndex === a.charIndex);
-    if (localIndex === -1) continue;
-
-    const beat = (a.cell - systemStartCell) / subdivision;
-    const beatClamped = clamp(beat, 0, systemBeats);
-    const x = (beatClamped / systemBeats) * systemWidthPx;
-
-    anchorPoints.push({ i: localIndex, x });
-  }
-  anchorPoints.sort((a, b) => (a.i - b.i) || (a.x - b.x));
-
-  if (anchorPoints.length >= 1) {
-    // Snap anchored tokens to their x
-    for (const ap of anchorPoints) xPos[ap.i] = ap.x;
-
-    // Even-spread ONLY between consecutive anchors
-    for (let k = 0; k < anchorPoints.length - 1; k++) {
-      const a = anchorPoints[k];
-      const b = anchorPoints[k + 1];
-      const count = b.i - a.i;
-      if (count <= 0) continue;
-
-      for (let i = a.i + 1; i < b.i; i++) {
-        const t = (i - a.i) / count;
-        xPos[i] = a.x + t * (b.x - a.x);
-      }
-    }
-
-    // Minimal non-overlap forward pass
-    for (let i = 1; i < tokens.length; i++) {
-      const minX = xPos[i - 1] + widthOf(tokens[i - 1]) + METRICS.gapPx;
-      if (xPos[i] < minX) xPos[i] = minX;
-    }
-  }
-
-  if (tokens.length === 0) return [];
-
-  // Clamp into view by shifting whole line
-  const minLeft = Math.min(...xPos);
-  const maxRight = Math.max(...xPos.map((x, i) => x + widthOf(tokens[i])));
-
-  let shift = 0;
-  if (minLeft < 0) shift = -minLeft;
-  if (maxRight + shift > systemWidthPx) {
-    const overflow = maxRight + shift - systemWidthPx;
-    shift = Math.max(0, shift - overflow);
-  }
-
-  return tokens.map((t, i) => ({ token: t, x: xPos[i] + shift }));
-}
-
-/**
- * Chunk tokens into systems:
- * - BASE behavior: fill by estimated width
- * - If a system contains anchors, they can ONLY EXTEND the end (never truncate)
- * - Apply bar-start anchor rule: if anchored word is at beat1 of a bar (cell % barCells === 0),
- *   that anchored word must be first => boundary shifts
- *
- * FIX: do NOT apply the "bar-start anchor must be first" rule on system 0,
- * because there's no previous system to receive the earlier tokens (they would vanish).
- */
-function chunkTokensWithBarStartRule(args: {
-  tokens: Token[];
-  anchors: LyricAnchor[];
-  systems: { startCell: number; endCell: number }[];
-  systemWidthPx: number;
-  barCells: number;
-}) {
-  const { tokens, anchors, systems, systemWidthPx, barCells } = args;
-
-  // Map charIndex -> global token index (word tokens only)
-  const tokenIndexByCharIndex = new Map<number, number>();
-  tokens.forEach((t, idx) => {
-    if (t.kind === "word") tokenIndexByCharIndex.set(t.charIndex, idx);
-  });
-
-  // For each system, find max anchored token index that falls in that system
-  const requiredMaxBySystem = systems.map(() => -1);
-  for (let s = 0; s < systems.length; s++) {
-    const { startCell, endCell } = systems[s];
-    let maxTok = -1;
-    for (const a of anchors) {
-      if (a.cell >= startCell && a.cell < endCell) {
-        const tokIdx = tokenIndexByCharIndex.get(a.charIndex);
-        if (tokIdx !== undefined) maxTok = Math.max(maxTok, tokIdx);
-      }
-    }
-    requiredMaxBySystem[s] = maxTok;
-  }
-
-  // 1) initial chunking forward: fill by width FIRST
-  const ranges: Range[] = [];
-  let ptr = 0;
-
-  for (let s = 0; s < systems.length; s++) {
-    if (ptr >= tokens.length) {
-      ranges.push({ start: ptr, end: ptr });
-      continue;
-    }
-
-    let used = 0;
-    let end = ptr;
-
-    while (end < tokens.length) {
-      const w = estWidthOfToken(tokens[end]);
-      const nextUsed = used + w + (end === ptr ? 0 : METRICS.gapPx);
-      if (nextUsed > systemWidthPx && end > ptr) break;
-      used = nextUsed;
-      end++;
-      if (end - ptr >= 160) break;
-    }
-
-    // anchors can EXTEND only
-    const reqMax = requiredMaxBySystem[s];
-    if (reqMax >= ptr) {
-      const neededEnd = Math.min(reqMax + 1, tokens.length);
-      if (neededEnd > end) end = neededEnd;
-    }
-
-    ranges.push({ start: ptr, end });
-    ptr = end;
-  }
-
-  // 2) BAR-START ANCHOR RULE adjustment (but NOT on system 0)
-  for (let s = 0; s < systems.length; s++) {
-    if (s === 0) continue; // <-- FIX: never discard leading tokens in first system
-
-    const { startCell, endCell } = systems[s];
-
-    let boundaryTok = Number.POSITIVE_INFINITY;
-
-    for (const a of anchors) {
-      if (a.cell < startCell || a.cell >= endCell) continue;
-      if (a.cell % barCells !== 0) continue; // beat 1 of a bar
-      const tokIdx = tokenIndexByCharIndex.get(a.charIndex);
-      if (tokIdx === undefined) continue;
-      boundaryTok = Math.min(boundaryTok, tokIdx);
-    }
-
-    if (boundaryTok === Number.POSITIVE_INFINITY) continue;
-
-    if (ranges[s].start < boundaryTok && boundaryTok < ranges[s].end) {
-      ranges[s].start = boundaryTok;
-      ranges[s - 1].end = Math.max(ranges[s - 1].end, boundaryTok);
-    }
-
-    if (ranges[s].end < ranges[s].start) ranges[s].end = ranges[s].start;
-    if (ranges[s - 1].end < ranges[s - 1].start) ranges[s - 1].end = ranges[s - 1].start;
-  }
-
-  return ranges.map((r) => tokens.slice(r.start, r.end));
 }
 
 export function LeadSheetGrid(props: {
@@ -367,25 +115,40 @@ export function LeadSheetGrid(props: {
 
   const lyricTokens = useMemo(() => tokenizeAllLyrics(lyrics), [lyrics]);
 
-  const tokenChunks = useMemo(() => {
-    return chunkTokensWithBarStartRule({
+  const anchorsBySystem = useMemo(() => {
+    return buildAnchorsBySystem({ anchors, systemsTiming });
+  }, [anchors, systemsTiming]);
+
+  const initialTokenChunks = useMemo(() => {
+    return chunkTokensForwardOnly({
       tokens: lyricTokens,
       anchors,
       systems: systemsTiming,
       systemWidthPx,
-      barCells,
+      subdivision,
     });
-  }, [lyricTokens, anchors, systemsTiming, systemWidthPx, barCells]);
+  }, [lyricTokens, anchors, systemsTiming, systemWidthPx, subdivision]);
+
+  const tokenChunks = useMemo(() => {
+    return reflowOverflowAcrossSystems({
+      initialChunks: initialTokenChunks,
+      anchorsBySystem,
+      systemsTiming,
+      subdivision,
+      systemWidthPx,
+    });
+  }, [initialTokenChunks, anchorsBySystem, systemsTiming, subdivision, systemWidthPx]);
 
   const systemLayouts = useMemo(() => {
-    return systems.map((systemBars, sysIdx) => {
+    return systems.map((_, sysIdx) => {
       const tokens = tokenChunks[sysIdx] ?? [];
       const systemStartCell = systemsTiming[sysIdx]?.startCell ?? 0;
-      const systemBeats = beatsPerBar * systemBars.length;
+      const systemBeats =
+        (systemsTiming[sysIdx].endCell - systemsTiming[sysIdx].startCell) / subdivision;
 
       const laidOut = layoutOnlyBetweenAnchors({
         tokens,
-        anchors,
+        anchors: anchorsBySystem[sysIdx] ?? [],
         systemStartCell,
         systemBeats,
         subdivision,
@@ -394,7 +157,7 @@ export function LeadSheetGrid(props: {
 
       return { tokens, laidOut };
     });
-  }, [systems, tokenChunks, systemsTiming, beatsPerBar, anchors, subdivision, systemWidthPx]);
+  }, [systems, tokenChunks, systemsTiming, anchorsBySystem, subdivision, systemWidthPx]);
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -409,9 +172,7 @@ export function LeadSheetGrid(props: {
                 const hasAnyChords = segments.length > 0;
 
                 const singleFullBar =
-                  hasAnyChords &&
-                  segments.length === 1 &&
-                  nearlyEqual(segments[0].beats, beatsPerBar);
+                  hasAnyChords && segments.length === 1 && nearlyEqual(segments[0].beats, beatsPerBar);
 
                 const beatsList = segments.map((s) => s.beats);
                 const evenlyDivided =
@@ -454,9 +215,7 @@ export function LeadSheetGrid(props: {
                                 bottom: 0,
                                 left: `${(cellIdx / barCells) * 100}%`,
                                 width: 1,
-                                background: isBeatLine
-                                  ? "rgba(255,255,255,0.18)"
-                                  : "rgba(255,255,255,0.12)",
+                                background: isBeatLine ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.12)",
                               }}
                             />
                           );
@@ -481,10 +240,7 @@ export function LeadSheetGrid(props: {
                               const sub = cellIdx % subdivision;
                               const text = sub === 0 ? String(beatNumber) : "&";
                               return (
-                                <div
-                                  key={cellIdx}
-                                  style={{ textAlign: "center", transform: "translateY(-2px)" }}
-                                >
+                                <div key={cellIdx} style={{ textAlign: "center", transform: "translateY(-2px)" }}>
                                   {text}
                                 </div>
                               );
@@ -493,6 +249,7 @@ export function LeadSheetGrid(props: {
                         ) : null}
                       </div>
 
+                      {/* Click targets */}
                       <div style={{ position: "absolute", inset: 12, zIndex: 5 }}>
                         {Array.from({ length: barCells }).map((_, cellIdx) => {
                           const leftPct = (cellIdx / barCells) * 100;
@@ -500,8 +257,7 @@ export function LeadSheetGrid(props: {
 
                           const beatNumber = Math.floor(cellIdx / subdivision) + 1;
                           const sub = cellIdx % subdivision;
-                          const label =
-                            subdivision === 1 ? `${beatNumber}` : sub === 0 ? `${beatNumber}` : "&";
+                          const label = subdivision === 1 ? `${beatNumber}` : sub === 0 ? `${beatNumber}` : "&";
 
                           return (
                             <button
@@ -582,6 +338,7 @@ export function LeadSheetGrid(props: {
               })}
             </div>
 
+            {/* Lyrics */}
             <div
               style={{
                 width: systemWidthPx,
@@ -593,8 +350,7 @@ export function LeadSheetGrid(props: {
               }}
             >
               <div style={{ opacity: 0.7, fontSize: 12, marginBottom: 6 }}>
-                Lyrics (continuous) — click a word then click{" "}
-                {subdivision > 1 ? "1 & 2 & 3 & 4 &" : "a beat"}
+                Lyrics (continuous) — click a word then click {subdivision > 1 ? "1 & 2 & 3 & 4 &" : "a beat"}
               </div>
 
               {!lyrics.trim() ? (
@@ -607,16 +363,22 @@ export function LeadSheetGrid(props: {
                     position: "relative",
                     height: 44,
                     overflow: "hidden",
-                    fontFamily:
-                      "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
                   }}
                 >
-                  {laidOut.map(({ token, x }) => {
+                  {laidOut.map(({ token, x }, i) => {
                     if (token.kind === "hyphen") {
                       return (
                         <span
-                          key={`hy-${token.charIndex}`}
-                          style={{ position: "absolute", left: x, top: 10, opacity: 0.9 }}
+                          key={`hy-${sysIdx}-${token.charIndex}-${i}`}
+                          style={{
+                            position: "absolute",
+                            left: x,
+                            top: 14,
+                            opacity: 0.9,
+                            width: LYRIC_METRICS.hyphenPx,
+                            textAlign: "center",
+                          }}
                         >
                           -
                         </span>
@@ -628,7 +390,7 @@ export function LeadSheetGrid(props: {
 
                     return (
                       <button
-                        key={`w-${token.charIndex}-${token.text}`}
+                        key={`w-${sysIdx}-${token.charIndex}-${token.text}-${i}`}
                         type="button"
                         onClick={() => onSelectCharIndex(token.charIndex)}
                         style={{
