@@ -5,17 +5,28 @@
   min-height: 100vh;
   padding: 24px;
   color: #111;
-  font-family: system-ui;
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+    "Segoe UI Emoji";
 }
 
+/* Screen preview = an actual A4 page */
 .sheet {
-  /* preview */
-  max-width: 980px;
+  width: 210mm;
+  min-height: 297mm;
+  box-sizing: border-box;
+
   margin: 0 auto;
   background: #fff;
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 12px;
-  padding: 20px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 10px;
+
+  padding: 12mm;
+}
+
+@media screen {
+  .sheet {
+    width: min(210mm, calc(100vw - 48px));
+  }
 }
 
 .header {
@@ -42,16 +53,33 @@
   margin-bottom: 14px;
 }
 
+.contentWrap {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+/* Fill page: no more shrinking. Bars are narrower now. */
+.content {
+  --preview-scale: 1;
+  transform: scale(var(--preview-scale));
+  transform-origin: top center;
+}
+
 @media print {
-  /* make the page itself a centering container */
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
   .page {
     background: #fff !important;
     padding: 0 !important;
     min-height: 100vh !important;
 
     display: flex !important;
-    align-items: center !important;    /* vertical centering */
-    justify-content: center !important; /* horizontal centering */
+    justify-content: center !important;
+    align-items: flex-start !important;
   }
 
   .controls {
@@ -59,18 +87,25 @@
   }
 
   .sheet {
-    /* a “safe” width inside A4 printable area */
-    width: 180mm;
+    width: 210mm;
+    min-height: 297mm;
     margin: 0 auto !important;
 
     background: transparent !important;
     border: none !important;
     border-radius: 0 !important;
+
     padding: 0 !important;
   }
 
-  @page {
-    size: A4;
-    margin: 12mm;
+  .content {
+    --preview-scale: 1;
+    transform: scale(var(--preview-scale));
+    transform-origin: top center;
+  }
+
+  .page * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
 }

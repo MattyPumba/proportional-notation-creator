@@ -57,8 +57,7 @@ export function LeadSheetGrid(props: {
   const beatsPerBar = timeSignature.beatsPerBar;
   const barCells = beatsPerBar * subdivision;
 
-  // Print: make timing track continuous (NO gaps)
-  const barWidthPx = isPrint ? 250 : 520;
+  const barWidthPx = isPrint ? 300 : 520;
   const gapPx = isPrint ? 0 : 16;
 
   const bars: BarModel[] = useMemo(() => {

@@ -68,13 +68,24 @@ export function SystemView(props: {
   const isPrint = mode === "print";
   const textColor = isPrint ? "#111" : "#fff";
 
+  // Print uses denser bars; keep x-consistency by removing internal padding offsets.
   const barPadding = isPrint ? 0 : 12;
+  const lyricPadding = isPrint ? 0 : 10;
+
+  // Print vertical tuning (prevents underlines cutting through chords)
+  const barHeight = isPrint ? 56 : 90;
+  const underlineTop = isPrint ? 40 : 60;
+
+  // Print lyric typography MUST match the metrics the engine expects.
+  // Editor uses monospace + 14px; print must match or tokens will collide/drift.
+  const lyricFontSize = isPrint ? 14 : 14;
+  const lyricLineTop = isPrint ? 6 : 4;
 
   return (
     <section
       style={{
         display: "grid",
-        gap: isPrint ? 8 : 10,
+        gap: isPrint ? 10 : 10,
         breakInside: "avoid",
         pageBreakInside: "avoid",
       }}
@@ -110,16 +121,16 @@ export function SystemView(props: {
                 style={{
                   position: "relative",
                   width: barWidthPx,
-                  height: isPrint ? 44 : 90,
+                  height: barHeight,
                   borderRadius: isPrint ? 0 : 10,
                   background: isPrint ? "transparent" : "#0f0f0f",
                   padding: barPadding,
-                  overflow: "hidden",
+                  overflow: "visible",
                 }}
               >
                 {/* EDITOR ONLY grid/labels */}
                 {!isPrint ? (
-                  <div style={{ position: "absolute", inset: 12, pointerEvents: "none", zIndex: 1 }}>
+                  <div style={{ position: "absolute", inset: barPadding, pointerEvents: "none", zIndex: 1 }}>
                     {Array.from({ length: barCells }).map((_, cellIdx) => {
                       if (cellIdx === 0) return null;
                       const isBeatLine = cellIdx % subdivision === 0;
@@ -169,9 +180,9 @@ export function SystemView(props: {
                   </div>
                 ) : null}
 
-                {/* EDITOR ONLY click targets */}
+                {/* EDITOR ONLY click targets (per cell) */}
                 {!isPrint && onBeatClick ? (
-                  <div style={{ position: "absolute", inset: 12, zIndex: 5 }}>
+                  <div style={{ position: "absolute", inset: barPadding, zIndex: 5 }}>
                     {Array.from({ length: barCells }).map((_, cellIdx) => {
                       const leftPct = (cellIdx / barCells) * 100;
                       const widthPct = (1 / barCells) * 100;
@@ -203,14 +214,14 @@ export function SystemView(props: {
                   </div>
                 ) : null}
 
-                {/* Underline */}
+                {/* Underline (moved lower in print so it never cuts chords) */}
                 {showUnderline ? (
                   <div
                     style={{
                       position: "absolute",
                       left: barPadding,
                       right: barPadding,
-                      top: isPrint ? 28 : 60,
+                      top: underlineTop,
                       height: 3,
                       background: isPrint ? "rgba(0,0,0,0.28)" : "#eaeaea",
                       borderRadius: 999,
@@ -224,19 +235,20 @@ export function SystemView(props: {
                   const leftPct = (seg.startCellInBar / barCells) * 100;
                   const tickCount = Math.max(1, Math.round(seg.beats));
 
+                  // Print uses pure % (no padding offset). Editor keeps the padded alignment.
+                  const left = isPrint ? `${leftPct}%` : `calc(${leftPct}% + ${barPadding}px)`;
+
                   return (
                     <div
                       key={`${seg.symbol}-${idx}-${seg.startCellInBar}`}
                       style={{
                         position: "absolute",
-                        /* IMPORTANT: no negative translate in print */
-                        left: isPrint ? `${leftPct}%` : `calc(${leftPct}% + 12px)`,
+                        left,
                         top: 2,
                         transform: isPrint ? "none" : "translateX(-2px)",
                         color: textColor,
                         fontFamily: "system-ui",
                         zIndex: 3,
-                        paddingLeft: isPrint ? 0 : 0,
                       }}
                     >
                       {showTicks ? (
@@ -279,7 +291,7 @@ export function SystemView(props: {
         style={{
           width: systemWidthPx,
           maxWidth: "100%",
-          padding: isPrint ? 0 : 10,
+          padding: lyricPadding,
           borderRadius: isPrint ? 0 : 10,
           background: isPrint ? "transparent" : "rgba(255,255,255,0.06)",
           border: isPrint ? "none" : "1px solid rgba(255,255,255,0.10)",
@@ -299,9 +311,12 @@ export function SystemView(props: {
           <div
             style={{
               position: "relative",
-              height: isPrint ? 22 : 44,
-              overflow: "hidden",
+              height: isPrint ? 32 : 44,
+              // IMPORTANT: don't clip in print — clipping + overlap looks like "drift"
+              overflow: isPrint ? "visible" : "hidden",
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              fontSize: lyricFontSize,
+              lineHeight: `${lyricFontSize + 4}px`,
               color: textColor,
             }}
           >
@@ -313,12 +328,12 @@ export function SystemView(props: {
                     style={{
                       position: "absolute",
                       left: x,
-                      top: isPrint ? 2 : 14,
+                      top: isPrint ? lyricLineTop : 14,
                       opacity: 0.9,
                       width: LYRIC_METRICS.hyphenPx,
                       textAlign: "center",
                       color: textColor,
-                      fontSize: isPrint ? 12 : 14,
+                      fontSize: lyricFontSize,
                     }}
                   >
                     -
@@ -336,9 +351,9 @@ export function SystemView(props: {
                     style={{
                       position: "absolute",
                       left: x,
-                      top: 2,
+                      top: lyricLineTop,
                       whiteSpace: "nowrap",
-                      fontSize: 12,
+                      fontSize: lyricFontSize,
                     }}
                   >
                     {token.text}

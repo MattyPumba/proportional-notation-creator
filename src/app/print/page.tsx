@@ -84,18 +84,24 @@ export default function PrintPage() {
           </button>
         </div>
 
-        <LeadSheetGrid
-          mode="print"
-          chords={displayChords}
-          timeSignature={doc.timeSignature}
-          subdivision={doc.subdivision}
-          lyrics={section.lyrics}
-          anchors={section.anchors}
-          selectedCharIndex={null}
-          onSelectCharIndex={() => {}}
-          onBeatClick={() => {}}
-          barsPerSystem={3}
-        />
+        {/* IMPORTANT: scale only the chart content so preview matches printed A4 fit,
+            without changing any layout computations. */}
+        <div className={styles.contentWrap}>
+          <div className={styles.content}>
+            <LeadSheetGrid
+              mode="print"
+              chords={displayChords}
+              timeSignature={doc.timeSignature}
+              subdivision={doc.subdivision}
+              lyrics={section.lyrics}
+              anchors={section.anchors}
+              selectedCharIndex={null}
+              onSelectCharIndex={() => {}}
+              onBeatClick={() => {}}
+              barsPerSystem={3}
+            />
+          </div>
+        </div>
       </div>
     </main>
   );
