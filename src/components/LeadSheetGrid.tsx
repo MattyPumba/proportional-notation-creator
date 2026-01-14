@@ -11,6 +11,7 @@ import {
 } from "@/lib/lyrics/chunking";
 
 import { SystemView } from "@/components/SystemView";
+import { PrintSystemView } from "@/components/PrintSystemView";
 
 type Segment = {
   symbol: string;
@@ -57,8 +58,13 @@ export function LeadSheetGrid(props: {
   const beatsPerBar = timeSignature.beatsPerBar;
   const barCells = beatsPerBar * subdivision;
 
-  const barWidthPx = isPrint ? 300 : 520;
-  const gapPx = isPrint ? 0 : 16;
+  // Editor geometry (source-of-truth for deriving implicit token positions)
+  const editorBarWidthPx = 520;
+  const editorGapPx = 16;
+
+  // Print geometry (render-only)
+  const printBarWidthPx = 250;
+  const printGapPx = 10;
 
   const bars: BarModel[] = useMemo(() => {
     if (barCells <= 0) return [];
@@ -100,10 +106,6 @@ export function LeadSheetGrid(props: {
     return out;
   }, [bars, barsPerSystem]);
 
-  const systemWidthPx = useMemo(() => {
-    return barsPerSystem * barWidthPx + (barsPerSystem - 1) * gapPx;
-  }, [barsPerSystem, barWidthPx, gapPx]);
-
   const systemsTiming = useMemo(() => {
     return systems.map((systemBars) => {
       const firstBarIndex = systemBars[0]?.barIndex ?? 0;
@@ -119,15 +121,21 @@ export function LeadSheetGrid(props: {
     return buildAnchorsBySystem({ anchors, systemsTiming });
   }, [anchors, systemsTiming]);
 
+  // NOTE: chunking is based on a system width.
+  // For print, we want the SAME chunking decisions as editor so we don't move tokens to different systems.
+  const editorSystemWidthPx = useMemo(() => {
+    return barsPerSystem * editorBarWidthPx + (barsPerSystem - 1) * editorGapPx;
+  }, [barsPerSystem]);
+
   const initialTokenChunks = useMemo(() => {
     return chunkTokensForwardOnly({
       tokens: lyricTokens,
       anchors,
       systems: systemsTiming,
-      systemWidthPx,
+      systemWidthPx: editorSystemWidthPx,
       subdivision,
     });
-  }, [lyricTokens, anchors, systemsTiming, systemWidthPx, subdivision]);
+  }, [lyricTokens, anchors, systemsTiming, editorSystemWidthPx, subdivision]);
 
   const tokenChunks = useMemo(() => {
     return reflowOverflowAcrossSystems({
@@ -135,40 +143,79 @@ export function LeadSheetGrid(props: {
       anchorsBySystem,
       systemsTiming,
       subdivision,
-      systemWidthPx,
+      systemWidthPx: editorSystemWidthPx,
     });
-  }, [initialTokenChunks, anchorsBySystem, systemsTiming, subdivision, systemWidthPx]);
+  }, [initialTokenChunks, anchorsBySystem, systemsTiming, subdivision, editorSystemWidthPx]);
 
-  const systemLayouts = useMemo(() => {
-    return systems.map((_, sysIdx) => {
+  // Compute editor laidOutPx ALWAYS (even for print) so print can inherit it.
+  const editorLayouts = useMemo(() => {
+    return systems.map((systemBars, sysIdx) => {
       const tokens = tokenChunks[sysIdx] ?? [];
       const systemStartCell = systemsTiming[sysIdx]?.startCell ?? 0;
-      const systemBeats =
-        (systemsTiming[sysIdx].endCell - systemsTiming[sysIdx].startCell) / subdivision;
 
-      const laidOut = layoutOnlyBetweenAnchors({
+      const systemBeats = (systemBars.length * barCells) / subdivision;
+
+      const laidOutPx = layoutOnlyBetweenAnchors({
         tokens,
         anchors: anchorsBySystem[sysIdx] ?? [],
         systemStartCell,
         systemBeats,
         subdivision,
-        systemWidthPx,
+        systemWidthPx: editorSystemWidthPx,
       });
 
-      return { tokens, laidOut };
+      return { tokens, laidOutPx, systemStartCell, systemBars };
     });
-  }, [systems, tokenChunks, systemsTiming, anchorsBySystem, subdivision, systemWidthPx]);
+  }, [systems, tokenChunks, systemsTiming, anchorsBySystem, subdivision, editorSystemWidthPx, barCells]);
+
+  // Convert editor px positions -> implicit cell positions for print
+  const printLayouts = useMemo(() => {
+    const pxPerCell = barCells > 0 ? editorBarWidthPx / barCells : 1;
+
+    return editorLayouts.map((l) => {
+      const laidOutCells = l.laidOutPx.map(({ token, x }: any) => ({
+        token,
+        cell: l.systemStartCell + x / pxPerCell,
+      }));
+      return { ...l, laidOutCells };
+    });
+  }, [editorLayouts, barCells]);
 
   return (
-    <div style={{ display: "grid", gap: isPrint ? 16 : 18 }}>
+    <div style={{ display: "grid", gap: isPrint ? 18 : 18 }}>
       {systems.map((systemBars, sysIdx) => {
-        const tokens = systemLayouts[sysIdx]?.tokens ?? [];
-        const laidOut = systemLayouts[sysIdx]?.laidOut ?? [];
+        const lEdit = editorLayouts[sysIdx];
+        const lPrint = printLayouts[sysIdx];
+
+        if (isPrint) {
+          return (
+            <PrintSystemView
+              key={sysIdx}
+              systemIndex={sysIdx}
+              systemBars={systemBars}
+              timeSignature={timeSignature}
+              subdivision={subdivision}
+              barCells={barCells}
+              beatsPerBar={beatsPerBar}
+              systemStartCell={lPrint.systemStartCell}
+              barWidthPx={printBarWidthPx}
+              gapPx={printGapPx}
+              lyrics={lyrics}
+              tokens={lPrint.tokens}
+              laidOutCells={lPrint.laidOutCells}
+              anchors={anchors}
+            />
+          );
+        }
+
+        // editor mode: keep existing SystemView path
+        const systemWidthPx =
+          barsPerSystem * editorBarWidthPx + (barsPerSystem - 1) * editorGapPx;
 
         return (
           <SystemView
             key={sysIdx}
-            mode={mode}
+            mode="editor"
             systemIndex={sysIdx}
             systemBars={systemBars}
             timeSignature={timeSignature}
@@ -176,15 +223,15 @@ export function LeadSheetGrid(props: {
             barCells={barCells}
             beatsPerBar={beatsPerBar}
             systemWidthPx={systemWidthPx}
-            barWidthPx={barWidthPx}
-            gapPx={gapPx}
-            onBeatClick={mode === "editor" ? onBeatClick : undefined}
+            barWidthPx={editorBarWidthPx}
+            gapPx={editorGapPx}
+            onBeatClick={onBeatClick}
             lyrics={lyrics}
-            tokens={tokens}
-            laidOut={laidOut}
+            tokens={lEdit.tokens}
+            laidOut={lEdit.laidOutPx}
             anchors={anchors}
-            selectedCharIndex={mode === "editor" ? selectedCharIndex : null}
-            onSelectCharIndex={mode === "editor" ? onSelectCharIndex : undefined}
+            selectedCharIndex={selectedCharIndex}
+            onSelectCharIndex={onSelectCharIndex}
           />
         );
       })}

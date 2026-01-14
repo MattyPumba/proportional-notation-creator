@@ -5,68 +5,82 @@
   min-height: 100vh;
   padding: 24px;
   color: #111;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
-    "Segoe UI Emoji";
+  font-family: system-ui;
 }
 
-/* Screen preview = an actual A4 page */
+/* Screen preview: A4-ish sheet */
 .sheet {
   width: 210mm;
   min-height: 297mm;
-  box-sizing: border-box;
 
   margin: 0 auto;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.12);
-  border-radius: 10px;
+  border-radius: 12px;
 
-  padding: 12mm;
+  /* IMPORTANT: sheet padding is handled by printFrame so the scale preview matches print */
+  padding: 0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
-@media screen {
-  .sheet {
-    width: min(210mm, calc(100vw - 48px));
-  }
+/* Apply the SAME baked scaling on screen so preview matches print */
+.printFrame {
+  --printScale: 0.85;
+
+  box-sizing: border-box;
+
+  /* expand then scale down (same trick as print) */
+  width: calc(100% / var(--printScale));
+  transform: scale(var(--printScale));
+  transform-origin: top left;
+
+  /* match print padding */
+  padding: 10mm 12mm;
+
+  /* left aligned (matches print) */
+  margin: 0;
 }
 
 .header {
   display: flex;
+  align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  align-items: baseline;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .title {
-  font-size: 20px;
-  font-weight: 800;
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .meta {
-  font-size: 12px;
-  opacity: 0.75;
+  font-size: 13px;
+  opacity: 0.7;
 }
 
 .controls {
   display: flex;
   gap: 10px;
-  margin-bottom: 14px;
+  margin: 10px 0 18px;
 }
 
-.contentWrap {
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
+.controls button {
+  font-size: 13px;
+  padding: 2px 8px;
 }
 
-/* Fill page: no more shrinking. Bars are narrower now. */
-.content {
-  --preview-scale: 1;
-  transform: scale(var(--preview-scale));
-  transform-origin: top center;
-}
-
+/* PRINT */
 @media print {
+  :global(html) {
+    background: #fff !important;
+  }
+
+  :global(body) {
+    background: #fff !important;
+  }
+
   @page {
     size: A4;
     margin: 12mm;
@@ -75,11 +89,7 @@
   .page {
     background: #fff !important;
     padding: 0 !important;
-    min-height: 100vh !important;
-
-    display: flex !important;
-    justify-content: center !important;
-    align-items: flex-start !important;
+    min-height: auto !important;
   }
 
   .controls {
@@ -87,25 +97,31 @@
   }
 
   .sheet {
-    width: 210mm;
-    min-height: 297mm;
+    width: 100% !important;
+    min-height: auto !important;
     margin: 0 auto !important;
 
     background: transparent !important;
     border: none !important;
     border-radius: 0 !important;
+    box-sizing: border-box !important;
 
     padding: 0 !important;
+    overflow: visible !important;
   }
 
-  .content {
-    --preview-scale: 1;
-    transform: scale(var(--preview-scale));
-    transform-origin: top center;
-  }
+  .printFrame {
+    /* keep the exact same scaling behavior as screen */
+    --printScale: 0.85;
 
-  .page * {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+    box-sizing: border-box;
+    width: calc(100% / var(--printScale));
+    transform: scale(var(--printScale));
+    transform-origin: top left;
+
+    margin-left: 0;
+    margin-right: 0;
+
+    padding: 10mm 12mm;
   }
 }

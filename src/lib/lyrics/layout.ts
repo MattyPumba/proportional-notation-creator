@@ -1,16 +1,18 @@
 // src/lib/lyrics/layout.ts
 import type { LyricAnchor } from "@/lib/types";
 import type { LyricToken } from "@/lib/lyrics/tokens";
-import { LYRIC_METRICS } from "@/lib/lyrics/metrics";
 
-function nearlyEqual(a: number, b: number) {
-  return Math.abs(a - b) < 1e-9;
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n));
-}
-
+/**
+ * Editor layout: returns pixel x positions for tokens in a system.
+ *
+ * RULE:
+ * - Anchored tokens: x determined ONLY by their anchor cell.
+ * - Unanchored tokens: evenly spaced BETWEEN the surrounding anchored tokens,
+ *   including the span from system start -> first anchor, and last anchor -> system end.
+ *
+ * This is intentionally "musical" spacing (even in time), not "text packing".
+ * Print mode can inherit this as implicit anchors.
+ */
 export function layoutOnlyBetweenAnchors(args: {
   tokens: LyricToken[];
   anchors: LyricAnchor[];
@@ -21,102 +23,92 @@ export function layoutOnlyBetweenAnchors(args: {
 }) {
   const { tokens, anchors, systemStartCell, systemBeats, subdivision, systemWidthPx } = args;
 
-  function widthOf(t: LyricToken) {
-    if (t.kind === "hyphen") return LYRIC_METRICS.hyphenPx;
-    return t.text.length * LYRIC_METRICS.charPx + LYRIC_METRICS.padPx;
+  if (!tokens.length) return [];
+
+  // Map charIndex -> anchor cell (ABS)
+  const anchorCellByChar = new Map<number, number>();
+  for (const a of anchors) anchorCellByChar.set(a.charIndex, a.cell);
+
+  // Helper: anchor cell -> x in px
+  function cellToX(cellAbs: number) {
+    const beatsFromStart = (cellAbs - systemStartCell) / subdivision;
+    const t = systemBeats <= 0 ? 0 : beatsFromStart / systemBeats;
+    return t * systemWidthPx;
   }
 
-  // Default linear positions
-  const xPos: number[] = [];
-  let cursor = 0;
-  for (let i = 0; i < tokens.length; i++) {
-    xPos[i] = cursor;
-    cursor += widthOf(tokens[i]) + LYRIC_METRICS.gapPx;
-  }
+  // Identify which token indices are anchored (word tokens only)
+  const anchoredIdx: number[] = [];
+  const tokenAnchorX = new Map<number, number>();
 
-  // Map charIndex -> token index (WORD tokens only)
-  const tokenIndexByCharIndex = new Map<number, number>();
   tokens.forEach((t, idx) => {
-    if (t.kind === "word") tokenIndexByCharIndex.set(t.charIndex, idx);
+    if (t.kind !== "word") return;
+    const cell = anchorCellByChar.get(t.charIndex);
+    if (cell === undefined) return;
+    const x = cellToX(cell);
+    anchoredIdx.push(idx);
+    tokenAnchorX.set(idx, x);
   });
 
-  // Anchor points local to this system
-  const anchorPoints: { i: number; x: number }[] = [];
-  for (const a of anchors) {
-    const localIndex = tokenIndexByCharIndex.get(a.charIndex);
-    if (localIndex === undefined) continue;
+  anchoredIdx.sort((a, b) => a - b);
 
-    const beat = (a.cell - systemStartCell) / subdivision;
-    const beatClamped = clamp(beat, 0, systemBeats);
-    const x = (beatClamped / systemBeats) * systemWidthPx;
+  // Output x positions (px)
+  const xs = new Array(tokens.length).fill(0);
 
-    anchorPoints.push({ i: localIndex, x });
-  }
+  // Place anchored tokens
+  for (const i of anchoredIdx) xs[i] = tokenAnchorX.get(i)!;
 
-  anchorPoints.sort((a, b) => (a.i - b.i) || (a.x - b.x));
-
-  const anchoredIndex = new Set<number>(anchorPoints.map((p) => p.i));
-
-  if (anchorPoints.length >= 1) {
-    // Snap anchored tokens to their x (hard constraint)
-    for (const ap of anchorPoints) xPos[ap.i] = ap.x;
-
-    // Even-spread ONLY between consecutive anchors
-    for (let k = 0; k < anchorPoints.length - 1; k++) {
-      const a = anchorPoints[k];
-      const b = anchorPoints[k + 1];
-      const count = b.i - a.i;
-      if (count <= 0) continue;
-
-      for (let i = a.i + 1; i < b.i; i++) {
-        const t = (i - a.i) / count;
-        xPos[i] = a.x + t * (b.x - a.x);
-      }
+  // Helper: evenly distribute indices (exclusive ends) across an x-span
+  function distributeEvenly(startX: number, endX: number, indices: number[]) {
+    const n = indices.length;
+    if (n === 0) return;
+    if (n === 1) {
+      xs[indices[0]] = (startX + endX) / 2;
+      return;
     }
-
-    // HARD-CONSTRAINT collision handling:
-    // - Never move anchored tokens
-    // - If a non-anchored token would overlap an anchored token, push the non-anchored token left (backward)
-    // - Otherwise do a forward non-overlap pass that skips anchored positions
-    for (let i = 1; i < tokens.length; i++) {
-      const minX = xPos[i - 1] + widthOf(tokens[i - 1]) + LYRIC_METRICS.gapPx;
-
-      if (anchoredIndex.has(i)) {
-        // anchored token: keep it fixed; if previous overlaps, pull previous left (backward ripple)
-        if (minX > xPos[i]) {
-          let j = i - 1;
-          while (j >= 0) {
-            const maxRight = xPos[j] + widthOf(tokens[j]);
-            const allowedRight = xPos[j + 1] - LYRIC_METRICS.gapPx;
-            const newX = allowedRight - widthOf(tokens[j]);
-
-            if (maxRight + LYRIC_METRICS.gapPx <= xPos[j + 1] || nearlyEqual(xPos[j], newX)) {
-              break;
-            }
-
-            xPos[j] = Math.min(xPos[j], newX);
-            j--;
-            if (j >= 0 && anchoredIndex.has(j)) break; // never move anchors
-          }
-        }
-        continue;
-      }
-
-      // non-anchored token: regular forward non-overlap
-      if (xPos[i] < minX) xPos[i] = minX;
+    for (let k = 0; k < n; k++) {
+      const t = (k + 1) / (n + 1); // exclude endpoints
+      xs[indices[k]] = startX + t * (endX - startX);
     }
   }
 
-  // Clamp into view by shifting whole line (does NOT alter relative anchor positions)
-  const minLeft = Math.min(...xPos);
-  const maxRight = Math.max(...xPos.map((x, i) => x + widthOf(tokens[i])));
-
-  let shift = 0;
-  if (minLeft < 0) shift = -minLeft;
-  if (maxRight + shift > systemWidthPx) {
-    const overflow = maxRight + shift - systemWidthPx;
-    shift = Math.max(0, shift - overflow);
+  // Span 1: start -> first anchor
+  if (anchoredIdx.length > 0) {
+    const firstA = anchoredIdx[0];
+    const before = [];
+    for (let i = 0; i < firstA; i++) before.push(i);
+    distributeEvenly(0, xs[firstA], before);
+  } else {
+    // No anchors at all: evenly spread all tokens across system
+    const all = tokens.map((_, i) => i);
+    // place first at 0, last at systemWidth; internal evenly spaced
+    if (all.length === 1) {
+      xs[0] = systemWidthPx * 0.2;
+    } else {
+      for (let i = 0; i < all.length; i++) {
+        xs[i] = (i / (all.length - 1)) * systemWidthPx;
+      }
+    }
+    return tokens.map((token, i) => ({ token, x: xs[i] }));
   }
 
-  return tokens.map((t, i) => ({ token: t, x: xPos[i] + shift }));
+  // Spans between anchors
+  for (let a = 0; a < anchoredIdx.length - 1; a++) {
+    const leftA = anchoredIdx[a];
+    const rightA = anchoredIdx[a + 1];
+
+    const indices: number[] = [];
+    for (let i = leftA + 1; i < rightA; i++) indices.push(i);
+
+    distributeEvenly(xs[leftA], xs[rightA], indices);
+  }
+
+  // Span last: last anchor -> end
+  if (anchoredIdx.length > 0) {
+    const lastA = anchoredIdx[anchoredIdx.length - 1];
+    const after: number[] = [];
+    for (let i = lastA + 1; i < tokens.length; i++) after.push(i);
+    distributeEvenly(xs[lastA], systemWidthPx, after);
+  }
+
+  return tokens.map((token, i) => ({ token, x: xs[i] }));
 }

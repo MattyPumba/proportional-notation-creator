@@ -63,44 +63,42 @@ export default function PrintPage() {
   return (
     <main className={styles.page}>
       <div className={styles.sheet}>
-        <div className={styles.header}>
-          <div className={styles.title}>
-            {doc.title || "Untitled"}{" "}
-            <span className={styles.meta}>
-              — {doc.displayKey} (orig {doc.originalKey}, +{delta})
-            </span>
+        {/* IMPORTANT: this wrapper is what lets print.module.css bake in the 0.85 scale */}
+        <div className={styles.printFrame}>
+          <div className={styles.header}>
+            <div className={styles.title}>
+              {doc.title || "Untitled"}{" "}
+              <span className={styles.meta}>
+                — {doc.displayKey} (orig {doc.originalKey}, +{delta})
+              </span>
+            </div>
+            <div className={styles.meta}>
+              {doc.timeSignature.beatsPerBar}/{doc.timeSignature.beatUnit} • subdivision{" "}
+              {doc.subdivision}
+            </div>
           </div>
-          <div className={styles.meta}>
-            {doc.timeSignature.beatsPerBar}/{doc.timeSignature.beatUnit} • subdivision {doc.subdivision}
-          </div>
-        </div>
 
-        <div className={styles.controls}>
-          <button type="button" onClick={() => window.print()}>
-            Print…
-          </button>
-          <button type="button" onClick={() => window.close()}>
-            Close
-          </button>
-        </div>
-
-        {/* IMPORTANT: scale only the chart content so preview matches printed A4 fit,
-            without changing any layout computations. */}
-        <div className={styles.contentWrap}>
-          <div className={styles.content}>
-            <LeadSheetGrid
-              mode="print"
-              chords={displayChords}
-              timeSignature={doc.timeSignature}
-              subdivision={doc.subdivision}
-              lyrics={section.lyrics}
-              anchors={section.anchors}
-              selectedCharIndex={null}
-              onSelectCharIndex={() => {}}
-              onBeatClick={() => {}}
-              barsPerSystem={3}
-            />
+          <div className={styles.controls}>
+            <button type="button" onClick={() => window.print()}>
+              Print…
+            </button>
+            <button type="button" onClick={() => window.close()}>
+              Close
+            </button>
           </div>
+
+          <LeadSheetGrid
+            mode="print"
+            chords={displayChords}
+            timeSignature={doc.timeSignature}
+            subdivision={doc.subdivision}
+            lyrics={section.lyrics}
+            anchors={section.anchors}
+            selectedCharIndex={null}
+            onSelectCharIndex={() => {}}
+            onBeatClick={() => {}}
+            barsPerSystem={3}
+          />
         </div>
       </div>
     </main>
