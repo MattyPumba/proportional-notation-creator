@@ -10,7 +10,6 @@ import { LeadSheetGrid } from "@/components/LeadSheetGrid";
 
 const KEYS = ["C","G","D","A","E","B","F#","C#","F","Bb","Eb","Ab","Db","Gb","Cb"];
 const STORAGE_KEY = "pnc_doc_v1";
-
 const DELETE_TOOL = "__DELETE__";
 
 function newDoc(): LeadSheetDoc {
@@ -21,9 +20,7 @@ function newDoc(): LeadSheetDoc {
     displayKey: "C",
     timeSignature: { beatsPerBar: 4, beatUnit: 4 },
     subdivision: 1,
-    sections: [
-      { id: "section-1", name: "Verse 1", lyrics: "", chords: [], anchors: [] },
-    ],
+    sections: [{ id: "section-1", name: "Verse 1", lyrics: "", chords: [], anchors: [] }],
     updatedAt: "",
   };
 }
@@ -34,13 +31,6 @@ function isTypingTarget(el: EventTarget | null) {
   return tag === "INPUT" || tag === "TEXTAREA" || el.isContentEditable;
 }
 
-/**
- * Convert chord events back to a compact "SYMBOL:beats ..." string.
- *
- * - Beats are derived from cell deltas / subdivision.
- * - FINAL chord extends to END OF BAR.
- * - If the first chord starts after cell 0, prepend X:<beats>.
- */
 function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerBar: number) {
   if (!chords.length) return "";
 
@@ -50,15 +40,11 @@ function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerB
 
   const sorted = [...chords].sort((a, b) => a.cell - b.cell);
 
-  // Group chords that share the same cell; keep last one
   const uniqByCell: ChordEvent[] = [];
   for (const c of sorted) {
     const prev = uniqByCell[uniqByCell.length - 1];
-    if (prev && prev.cell === c.cell) {
-      uniqByCell[uniqByCell.length - 1] = c;
-    } else {
-      uniqByCell.push(c);
-    }
+    if (prev && prev.cell === c.cell) uniqByCell[uniqByCell.length - 1] = c;
+    else uniqByCell.push(c);
   }
 
   const parts: string[] = [];
@@ -75,9 +61,8 @@ function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerB
 
     let cellDelta: number;
 
-    if (next) {
-      cellDelta = Math.max(0, next.cell - cur.cell);
-    } else {
+    if (next) cellDelta = Math.max(0, next.cell - cur.cell);
+    else {
       const cellInBar = ((cur.cell % barCells) + barCells) % barCells;
       cellDelta = Math.max(0, barCells - cellInBar);
     }
@@ -94,16 +79,15 @@ export default function Home() {
   const [lastLoaded, setLastLoaded] = useState<string>("");
   const [selectedCharIndex, setSelectedCharIndex] = useState<number | null>(null);
 
-  // Chord hotbar state
-  const [armedChord, setArmedChord] = useState<string | null>(null); // DISPLAY symbol OR DELETE_TOOL
-  const [recentChords, setRecentChords] = useState<string[]>([]); // DISPLAY symbols, max 9
+  // Chord tools state
+  const [armedChord, setArmedChord] = useState<string | null>(null);
+  const [recentChords, setRecentChords] = useState<string[]>([]);
   const [chordQuickInput, setChordQuickInput] = useState<string>("");
-
-  // Draft string for the chord input; source of truth is still section.chords
   const [chordDraft, setChordDraft] = useState<string>("");
 
-  // Lyrics collapse
-  const [lyricsOpen, setLyricsOpen] = useState<boolean>(true);
+  // Dock collapse state
+  const [chordToolsOpen, setChordToolsOpen] = useState(true);
+  const [lyricsOpen, setLyricsOpen] = useState(true);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -116,10 +100,6 @@ export default function Home() {
     } catch {
       // ignore
     }
-  }, []);
-
-  useEffect(() => {
-    setDoc((d) => ({ ...d, updatedAt: new Date().toISOString() }));
   }, []);
 
   useEffect(() => {
@@ -153,17 +133,12 @@ export default function Home() {
   }, [section.chords, doc.subdivision, doc.timeSignature.beatsPerBar]);
 
   useEffect(() => {
-    setChordDraft((prev) => {
-      if (!prev) return chordStringFromDoc;
-      if (prev === chordStringFromDoc) return prev;
-      return prev;
-    });
+    setChordDraft((prev) => (prev ? prev : chordStringFromDoc));
   }, [chordStringFromDoc]);
 
   useEffect(() => {
     setRecentChords((prev) => {
       if (prev.length) return prev;
-
       const uniq: string[] = [];
       for (const c of displayChords) {
         const s = (c.symbol || "").trim();
@@ -178,10 +153,7 @@ export default function Home() {
   function bumpRecent(displaySymbol: string) {
     const sym = displaySymbol.trim();
     if (!sym) return;
-    setRecentChords((prev) => {
-      const next = [sym, ...prev.filter((x) => x !== sym)];
-      return next.slice(0, 9);
-    });
+    setRecentChords((prev) => [sym, ...prev.filter((x) => x !== sym)].slice(0, 9));
   }
 
   // Keyboard: 1-9 selects chord; Esc clears chord mode
@@ -225,12 +197,7 @@ export default function Home() {
     const clamped = Math.max(0, Math.min(charIndex, section.lyrics.length));
     const filtered = section.anchors.filter((a) => a.charIndex !== clamped);
 
-    const nextAnchor: LyricAnchor = {
-      id: crypto.randomUUID(),
-      charIndex: clamped,
-      cell,
-    };
-
+    const nextAnchor: LyricAnchor = { id: crypto.randomUUID(), charIndex: clamped, cell };
     const nextAnchors = [...filtered, nextAnchor].sort((a, b) => a.cell - b.cell);
 
     setDoc({
@@ -242,29 +209,20 @@ export default function Home() {
 
   function undoLastAnchor() {
     if (!section.anchors.length) return;
-    const nextAnchors = section.anchors.slice(0, -1);
     setDoc({
       ...doc,
-      sections: [{ ...section, anchors: nextAnchors }],
+      sections: [{ ...section, anchors: section.anchors.slice(0, -1) }],
       updatedAt: new Date().toISOString(),
     });
   }
 
   function placeChordAtCell(displaySymbol: string, cell: number) {
-    // Store chords in ORIGINAL key space
     const storageSymbol =
-      delta === 0
-        ? displaySymbol
-        : transposeChordSymbol(displaySymbol, -delta, originalAccStyle);
+      delta === 0 ? displaySymbol : transposeChordSymbol(displaySymbol, -delta, originalAccStyle);
 
     const filtered = section.chords.filter((c) => c.cell !== cell);
 
-    const next: ChordEvent = {
-      id: crypto.randomUUID(),
-      cell,
-      symbol: storageSymbol,
-    };
-
+    const next: ChordEvent = { id: crypto.randomUUID(), cell, symbol: storageSymbol };
     const nextChords = [...filtered, next].sort((a, b) => a.cell - b.cell);
 
     setDoc({
@@ -289,19 +247,16 @@ export default function Home() {
   }
 
   function onBeatClick(cell: number) {
-    // Delete tool mode
     if (armedChord === DELETE_TOOL) {
       removeChordAtCell(cell);
       return;
     }
 
-    // Place chord mode
     if (armedChord) {
       placeChordAtCell(armedChord, cell);
       return;
     }
 
-    // Anchor mode
     if (selectedCharIndex === null) return;
     addAnchor(selectedCharIndex, cell);
     setSelectedCharIndex(null);
@@ -317,22 +272,23 @@ export default function Home() {
 
   function applyChordDraft() {
     const chords = parseChordInput(chordDraft, doc.subdivision);
-
     setDoc({
       ...doc,
       sections: [{ ...section, chords }],
       updatedAt: new Date().toISOString(),
     });
-
     setChordDraft(chordsToBeatString(chords, doc.subdivision, doc.timeSignature.beatsPerBar));
   }
 
   const armedLabel =
-    armedChord === DELETE_TOOL ? "Delete chord" : armedChord ? `Chord: ${armedChord}` : null;
+    armedChord === DELETE_TOOL ? "Delete chord" : armedChord ? `Chord: ${armedChord}` : "none";
+
+  const lyricsSummary = section.lyrics
+    ? `${section.lyrics.split("\n").length} line(s)`
+    : "empty";
 
   return (
     <div className="appShell">
-      {/* Sticky top settings bar */}
       <header className="topBar">
         <div className="topBarInner">
           <div className="topRow">
@@ -388,7 +344,9 @@ export default function Home() {
                   setDoc({ ...doc, originalKey: e.target.value, updatedAt: new Date().toISOString() })
                 }
               >
-                {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                {KEYS.map((k) => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
               </select>
             </div>
 
@@ -400,7 +358,9 @@ export default function Home() {
                   setDoc({ ...doc, displayKey: e.target.value, updatedAt: new Date().toISOString() })
                 }
               >
-                {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+                {KEYS.map((k) => (
+                  <option key={k} value={k}>{k}</option>
+                ))}
               </select>
             </div>
 
@@ -448,155 +408,155 @@ export default function Home() {
               {lastLoaded ? <> • loaded: <strong>{lastLoaded}</strong></> : null}
             </div>
           </div>
+
+          {/* Dock (pinned under settings) */}
+          <div className="dockRow">
+            {/* Chord tools */}
+            <div className="dockPanel">
+              <div className="dockHeader">
+                <div className="dockHeaderLeft">
+                  <div className="dockTitle">Chord tools</div>
+                  <div className="dockMeta">
+                    Armed: <strong>{armedLabel}</strong> • {recentChords.length ? "1–9 to arm" : "place a chord to start"}
+                  </div>
+                </div>
+
+                <div className="dockHeaderRight">
+                  <button
+                    type="button"
+                    onClick={() => setArmedChord(DELETE_TOOL)}
+                    className={armedChord === DELETE_TOOL ? "chip chipActive" : "chip"}
+                    style={{ cursor: "pointer" }}
+                    title="Click a beat to remove a chord"
+                  >
+                    ⌫ Delete
+                  </button>
+
+                  <button type="button" onClick={() => setArmedChord(null)} disabled={!armedChord}>
+                    Clear
+                  </button>
+
+                  <button type="button" onClick={() => setChordToolsOpen((v) => !v)}>
+                    {chordToolsOpen ? "Collapse" : "Expand"}
+                  </button>
+                </div>
+              </div>
+
+              {chordToolsOpen ? (
+                <div className="dockBody dockBodyTight">
+                  <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+                    {recentChords.length ? (
+                      recentChords.map((sym, i) => {
+                        const active = sym === armedChord;
+                        return (
+                          <button
+                            key={`${sym}-${i}`}
+                            type="button"
+                            onClick={() => setArmedChord(sym)}
+                            title={`Press ${i + 1} to select`}
+                            className={active ? "chip chipActive" : "chip"}
+                            style={{ padding: "6px 10px" }}
+                          >
+                            <span style={{ opacity: 0.7, marginRight: 6 }}>{i + 1}</span>
+                            {sym}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <span className="muted">No recent chords yet.</span>
+                    )}
+
+                    <div className="spacer" />
+
+                    <input
+                      value={chordQuickInput}
+                      onChange={(e) => setChordQuickInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") armChordFromInput();
+                        if (e.key === "Escape") {
+                          setChordQuickInput("");
+                          setArmedChord(null);
+                        }
+                      }}
+                      placeholder="Type chord…"
+                      className="monoInput"
+                      style={{ width: 220 }}
+                    />
+                    <button type="button" onClick={armChordFromInput}>
+                      Arm
+                    </button>
+                  </div>
+
+                  <div className="field">
+                    <div className="fieldLabel">
+                      Chords (beats) — Enter apply • Esc revert
+                    </div>
+                    <input
+                      value={chordDraft}
+                      onChange={(e) => setChordDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") applyChordDraft();
+                        if (e.key === "Escape") setChordDraft(chordStringFromDoc);
+                      }}
+                      className="monoInput"
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Lyrics */}
+            <div className="dockPanel">
+              <div className="dockHeader">
+                <div className="dockHeaderLeft">
+                  <div className="dockTitle">Lyrics</div>
+                  <div className="dockMeta">
+                    {lyricsSummary} • Anchors: <strong>{section.anchors.length}</strong>
+                  </div>
+                </div>
+
+                <div className="dockHeaderRight">
+                  <button type="button" onClick={undoLastAnchor} disabled={!section.anchors.length}>
+                    Undo anchor
+                  </button>
+
+                  <button type="button" onClick={() => setLyricsOpen((v) => !v)}>
+                    {lyricsOpen ? "Collapse" : "Expand"}
+                  </button>
+                </div>
+              </div>
+
+              {lyricsOpen ? (
+                <div className="dockBody dockBodyTight">
+                  <textarea
+                    value={section.lyrics}
+                    onChange={(e) => setLyrics(e.target.value)}
+                    placeholder="Paste lyrics here…"
+                    style={{ width: "100%", minHeight: 90, maxHeight: 140 }}
+                  />
+
+                  <div className="muted" style={{ marginTop: 8 }}>
+                    Workflow: <strong>Click word under bars → click beat above</strong>
+                    {armedChord === DELETE_TOOL ? (
+                      <> • Delete: <strong>click beat to remove chord</strong></>
+                    ) : armedChord ? (
+                      <> • Chord: <strong>{armedChord}</strong> armed</>
+                    ) : selectedCharIndex !== null ? (
+                      <> • Word selected — now click a beat</>
+                    ) : (
+                      <> • Select a word, then click a beat</>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       </header>
 
-      {/* Scrollable editor pane */}
+      {/* ONLY the grid scrolls now */}
       <div className="content">
-        {/* Chord hotbar */}
-        <div className="card" style={{ marginBottom: 14 }}>
-          <div className="cardHeader">
-            <div>
-              <div className="cardTitle">Chord tools</div>
-              <div className="kbdHint">
-                Press <strong>1–9</strong> to arm a recent chord • Press <strong>Esc</strong> to clear
-              </div>
-            </div>
-
-            <div className="row">
-              {armedLabel ? (
-                <span className="chip chipActive">Armed: <strong>{armedLabel}</strong></span>
-              ) : (
-                <span className="chip">Armed: <span style={{ opacity: 0.7 }}>none</span></span>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setArmedChord(DELETE_TOOL)}
-                className={armedChord === DELETE_TOOL ? "chip chipActive" : "chip"}
-                style={{ cursor: "pointer" }}
-                title="Click a beat to remove a chord"
-              >
-                ⌫ Delete chord
-              </button>
-
-              <button type="button" onClick={() => setArmedChord(null)} disabled={!armedChord}>
-                Clear
-              </button>
-            </div>
-          </div>
-
-          <div className="row" style={{ marginBottom: 10 }}>
-            <div className="row" style={{ gap: 8 }}>
-              {recentChords.length ? (
-                recentChords.map((sym, i) => {
-                  const active = sym === armedChord;
-                  return (
-                    <button
-                      key={`${sym}-${i}`}
-                      type="button"
-                      onClick={() => setArmedChord(sym)}
-                      title={`Press ${i + 1} to select`}
-                      className={active ? "chip chipActive" : "chip"}
-                    >
-                      <span style={{ opacity: 0.7, marginRight: 6 }}>{i + 1}</span>
-                      {sym}
-                    </button>
-                  );
-                })
-              ) : (
-                <span className="muted">No recent chords yet — place one to start.</span>
-              )}
-            </div>
-
-            <div className="spacer" />
-
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                value={chordQuickInput}
-                onChange={(e) => setChordQuickInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") armChordFromInput();
-                  if (e.key === "Escape") {
-                    setChordQuickInput("");
-                    setArmedChord(null);
-                  }
-                }}
-                placeholder="Type chord (e.g., F2, Gadd4)…"
-                style={{ width: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}
-              />
-              <button type="button" onClick={armChordFromInput}>Arm</button>
-            </div>
-          </div>
-
-          <div className="field">
-            <div className="fieldLabel">Chords (beats) — press Enter to apply • Esc to revert</div>
-            <input
-              value={chordDraft}
-              onChange={(e) => setChordDraft(e.target.value)}
-              onFocus={() => setChordDraft((prev) => (prev ? prev : chordStringFromDoc))}
-              onBlur={() => {
-                setChordDraft((prev) => (prev === chordStringFromDoc ? chordStringFromDoc : prev));
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") applyChordDraft();
-                if (e.key === "Escape") setChordDraft(chordStringFromDoc);
-              }}
-              style={{
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                width: "100%",
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Lyrics */}
-        <div className="card" style={{ marginBottom: 14 }}>
-          <div className="cardHeader">
-            <div className="cardTitle">Lyrics</div>
-            <div className="row">
-              <button type="button" onClick={() => setLyricsOpen((v) => !v)}>
-                {lyricsOpen ? "Collapse" : "Expand"}
-              </button>
-
-              <button type="button" onClick={undoLastAnchor} disabled={!section.anchors.length}>
-                Undo last anchor
-              </button>
-
-              <span className="chip">
-                Anchors: <strong>{section.anchors.length}</strong>
-              </span>
-            </div>
-          </div>
-
-          {lyricsOpen ? (
-            <textarea
-              value={section.lyrics}
-              onChange={(e) => setLyrics(e.target.value)}
-              placeholder="Paste lyrics here…"
-              style={{ width: "100%", minHeight: 140 }}
-            />
-          ) : (
-            <div className="muted">
-              Lyrics hidden • {section.lyrics ? `${section.lyrics.split("\n").length} line(s)` : "empty"}
-            </div>
-          )}
-
-          <div className="muted" style={{ marginTop: 10 }}>
-            Workflow: <strong>Click word under bars → click beat above</strong>
-            {armedChord === DELETE_TOOL ? (
-              <> • Delete mode: <strong>click a beat to remove the chord</strong></>
-            ) : armedChord ? (
-              <> • Chord mode: <strong>{armedChord}</strong> armed</>
-            ) : selectedCharIndex !== null ? (
-              <> • Word selected — now click a beat</>
-            ) : (
-              <> • Select a word under a system, then click a beat</>
-            )}
-          </div>
-        </div>
-
-        {/* Main editor grid (this is now the "main" scroll content) */}
         <LeadSheetGrid
           mode="editor"
           chords={displayChords}

@@ -99,14 +99,14 @@ button:disabled {
 .topBar {
   position: sticky;
   top: 0;
-  z-index: 50;
-  background: rgba(10, 12, 16, 0.72);
+  z-index: 60;
+  background: rgba(10, 12, 16, 0.74);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
 
 .topBarInner {
-  padding: 12px 16px;
+  padding: 10px 14px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -126,7 +126,7 @@ button:disabled {
 }
 
 .brand h1 {
-  font-size: 18px;
+  font-size: 16px;
   margin: 0;
   font-weight: 800;
   letter-spacing: 0.2px;
@@ -174,7 +174,7 @@ button:disabled {
 .content {
   flex: 1;
   overflow: auto;
-  padding: 16px;
+  padding: 14px;
 }
 
 .card {
@@ -224,4 +224,73 @@ button:disabled {
 .kbdHint {
   font-size: 12px;
   color: var(--muted-2);
+}
+
+/* Dock: chord tools + lyrics (fixed under settings, not in scroll) */
+.dockRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .dockRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dockPanel {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.dockHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+}
+
+.dockHeaderLeft {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dockTitle {
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.dockMeta {
+  font-size: 12px;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dockHeaderRight {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.dockBody {
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.dockBodyTight {
+  padding: 8px 10px;
+}
+
+.monoInput {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
