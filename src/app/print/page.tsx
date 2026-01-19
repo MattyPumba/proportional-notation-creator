@@ -10,6 +10,11 @@ import styles from "./print.module.css";
 
 const STORAGE_KEY = "pnc_doc_v1";
 
+// Keep these in sync with LeadSheetGrid print geometry (skin-only constants)
+const PRINT_BAR_WIDTH_PX = 250;
+const PRINT_GAP_PX = 10;
+const PRINT_BARS_PER_SYSTEM = 3;
+
 export default function PrintPage() {
   const [doc, setDoc] = useState<LeadSheetDoc | null>(null);
 
@@ -42,6 +47,10 @@ export default function PrintPage() {
     }));
   }, [doc, section, delta, accStyle]);
 
+  const systemWidthPx =
+    PRINT_BARS_PER_SYSTEM * PRINT_BAR_WIDTH_PX +
+    (PRINT_BARS_PER_SYSTEM - 1) * PRINT_GAP_PX;
+
   if (!doc || !section) {
     return (
       <main className={styles.page}>
@@ -63,18 +72,25 @@ export default function PrintPage() {
   return (
     <main className={styles.page}>
       <div className={styles.sheet}>
-        {/* IMPORTANT: this wrapper is what lets print.module.css bake in the 0.85 scale */}
         <div className={styles.printFrame}>
-          <div className={styles.header}>
+          {/* Center header to match centered systems */}
+          <div
+            className={styles.header}
+            style={{
+              width: systemWidthPx,
+              maxWidth: "100%",
+              margin: "0 auto",
+            }}
+          >
             <div className={styles.title}>
               {doc.title || "Untitled"}{" "}
               <span className={styles.meta}>
                 — {doc.displayKey} (orig {doc.originalKey}, +{delta})
               </span>
             </div>
+
             <div className={styles.meta}>
-              {doc.timeSignature.beatsPerBar}/{doc.timeSignature.beatUnit} • subdivision{" "}
-              {doc.subdivision}
+              {doc.timeSignature.beatsPerBar}/{doc.timeSignature.beatUnit}
             </div>
           </div>
 
@@ -97,7 +113,7 @@ export default function PrintPage() {
             selectedCharIndex={null}
             onSelectCharIndex={() => {}}
             onBeatClick={() => {}}
-            barsPerSystem={3}
+            barsPerSystem={PRINT_BARS_PER_SYSTEM}
           />
         </div>
       </div>
