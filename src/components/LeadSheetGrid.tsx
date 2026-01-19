@@ -2,7 +2,7 @@
 import React, { useMemo } from "react";
 import type { ChordEvent, LyricAnchor, TimeSignature } from "@/lib/types";
 
-import { tokenizeAllLyrics } from "@/lib/lyrics/tokens";
+import { tokenizeAllLyrics, type LyricToken } from "@/lib/lyrics/tokens";
 import { layoutOnlyBetweenAnchors } from "@/lib/lyrics/layout";
 import {
   buildAnchorsBySystem,
@@ -10,8 +10,26 @@ import {
   reflowOverflowAcrossSystems,
 } from "@/lib/lyrics/chunking";
 
-import { SystemView } from "@/components/SystemView";
+import { SystemView, type LaidOutToken, type Token } from "@/components/SystemView";
 import { PrintSystemView } from "@/components/PrintSystemView";
+
+function toSystemToken(t: LyricToken): Token {
+  if (t.kind === "word") {
+    return {
+      kind: "word",
+      text: t.text,
+      charIndex: t.charIndex,
+      length: t.text.length,
+    };
+  }
+
+  // LyricToken hyphen includes text:"-"; SystemView token does not.
+  return {
+    kind: "hyphen",
+    charIndex: t.charIndex,
+    length: 1,
+  };
+}
 
 type Segment = {
   symbol: string;
@@ -212,6 +230,18 @@ export function LeadSheetGrid(props: {
         const systemWidthPx =
           barsPerSystem * editorBarWidthPx + (barsPerSystem - 1) * editorGapPx;
 
+        // SystemView expects its own Token/LaidOutToken shapes.
+        // We keep LyricToken for the lyrics pipeline (chunking/layout/print),
+        // and adapt at the boundary for the interactive editor view.
+        const systemTokens: Token[] = (lEdit.tokens ?? []).map(toSystemToken);
+        const laidOut: LaidOutToken[] = (lEdit.laidOutPx ?? []).map(
+          ({ token, x }: { token: LyricToken; x: number }, tokenIndex: number) => ({
+            tokenIndex,
+            token: toSystemToken(token),
+            x,
+          })
+        );
+
         return (
           <SystemView
             key={sysIdx}
@@ -227,8 +257,8 @@ export function LeadSheetGrid(props: {
             gapPx={editorGapPx}
             onBeatClick={onBeatClick}
             lyrics={lyrics}
-            tokens={lEdit.tokens}
-            laidOut={lEdit.laidOutPx}
+            tokens={systemTokens}
+            laidOut={laidOut}
             anchors={anchors}
             selectedCharIndex={selectedCharIndex}
             onSelectCharIndex={onSelectCharIndex}
