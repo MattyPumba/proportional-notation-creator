@@ -11,6 +11,8 @@ import { LeadSheetGrid } from "@/components/LeadSheetGrid";
 const KEYS = ["C","G","D","A","E","B","F#","C#","F","Bb","Eb","Ab","Db","Gb","Cb"];
 const STORAGE_KEY = "pnc_doc_v1";
 
+const DELETE_TOOL = "__DELETE__";
+
 function newDoc(): LeadSheetDoc {
   return {
     version: 1,
@@ -36,9 +38,8 @@ function isTypingTarget(el: EventTarget | null) {
  * Convert chord events back to a compact "SYMBOL:beats ..." string.
  *
  * - Beats are derived from cell deltas / subdivision.
- * - FINAL chord extends to END OF BAR (prevents "C:4" becoming "C:1").
- * - ALSO: if the first chord starts after cell 0, prepend a leading "X:<beats>".
- *   This preserves user-entered leading rests like "X:4 C:4".
+ * - FINAL chord extends to END OF BAR.
+ * - If the first chord starts after cell 0, prepend X:<beats>.
  */
 function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerBar: number) {
   if (!chords.length) return "";
@@ -62,7 +63,6 @@ function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerB
 
   const parts: string[] = [];
 
-  // ✅ NEW: leading gap before first chord becomes X:<beats>
   const firstCell = uniqByCell[0]?.cell ?? 0;
   if (firstCell > 0) {
     const leadBeats = Math.max(1, Math.round(firstCell / safeSub));
@@ -78,7 +78,6 @@ function chordsToBeatString(chords: ChordEvent[], subdivision: number, beatsPerB
     if (next) {
       cellDelta = Math.max(0, next.cell - cur.cell);
     } else {
-      // Final chord: extend to end of its bar
       const cellInBar = ((cur.cell % barCells) + barCells) % barCells;
       cellDelta = Math.max(0, barCells - cellInBar);
     }
@@ -96,16 +95,18 @@ export default function Home() {
   const [selectedCharIndex, setSelectedCharIndex] = useState<number | null>(null);
 
   // Chord hotbar state
-  const [armedChord, setArmedChord] = useState<string | null>(null); // DISPLAY symbol
+  const [armedChord, setArmedChord] = useState<string | null>(null); // DISPLAY symbol OR DELETE_TOOL
   const [recentChords, setRecentChords] = useState<string[]>([]); // DISPLAY symbols, max 9
   const [chordQuickInput, setChordQuickInput] = useState<string>("");
 
   // Draft string for the chord input; source of truth is still section.chords
   const [chordDraft, setChordDraft] = useState<string>("");
 
+  // Lyrics collapse
+  const [lyricsOpen, setLyricsOpen] = useState<boolean>(true);
+
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Restore doc from localStorage (if present)
   useEffect(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -117,12 +118,10 @@ export default function Home() {
     }
   }, []);
 
-  // Stamp updatedAt on initial mount
   useEffect(() => {
     setDoc((d) => ({ ...d, updatedAt: new Date().toISOString() }));
   }, []);
 
-  // Persist doc for print preview
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
@@ -149,7 +148,6 @@ export default function Home() {
     }));
   }, [section.chords, delta, displayAccStyle]);
 
-  // Keep the chord input field in sync with the doc chords (unless user is actively editing)
   const chordStringFromDoc = useMemo(() => {
     return chordsToBeatString(section.chords, doc.subdivision, doc.timeSignature.beatsPerBar);
   }, [section.chords, doc.subdivision, doc.timeSignature.beatsPerBar]);
@@ -158,11 +156,10 @@ export default function Home() {
     setChordDraft((prev) => {
       if (!prev) return chordStringFromDoc;
       if (prev === chordStringFromDoc) return prev;
-      return prev; // user is editing; don't overwrite
+      return prev;
     });
   }, [chordStringFromDoc]);
 
-  // Seed recents from currently displayed chords (once)
   useEffect(() => {
     setRecentChords((prev) => {
       if (prev.length) return prev;
@@ -226,7 +223,6 @@ export default function Home() {
 
   function addAnchor(charIndex: number, cell: number) {
     const clamped = Math.max(0, Math.min(charIndex, section.lyrics.length));
-
     const filtered = section.anchors.filter((a) => a.charIndex !== clamped);
 
     const nextAnchor: LyricAnchor = {
@@ -280,11 +276,32 @@ export default function Home() {
     bumpRecent(displaySymbol);
   }
 
+  function removeChordAtCell(cell: number) {
+    const before = section.chords.length;
+    const nextChords = section.chords.filter((c) => c.cell !== cell);
+    if (nextChords.length === before) return;
+
+    setDoc({
+      ...doc,
+      sections: [{ ...section, chords: nextChords }],
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   function onBeatClick(cell: number) {
+    // Delete tool mode
+    if (armedChord === DELETE_TOOL) {
+      removeChordAtCell(cell);
+      return;
+    }
+
+    // Place chord mode
     if (armedChord) {
       placeChordAtCell(armedChord, cell);
       return;
     }
+
+    // Anchor mode
     if (selectedCharIndex === null) return;
     addAnchor(selectedCharIndex, cell);
     setSelectedCharIndex(null);
@@ -307,287 +324,292 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
     });
 
-    // Re-sync draft immediately
     setChordDraft(chordsToBeatString(chords, doc.subdivision, doc.timeSignature.beatsPerBar));
   }
 
+  const armedLabel =
+    armedChord === DELETE_TOOL ? "Delete chord" : armedChord ? `Chord: ${armedChord}` : null;
+
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        fontFamily: "system-ui",
-        background: "#000",
-        color: "#fff",
-        padding: 24,
-      }}
-    >
-      <h1 style={{ fontSize: 22, margin: "0 0 12px" }}>
-        Proportional Notation Creator
-      </h1>
-
-      <div style={{ display: "flex", gap: 12, marginBottom: 8, flexWrap: "wrap" }}>
-        <button onClick={() => downloadJson(doc, doc.title)}>Export .json</button>
-        <button onClick={() => fileRef.current?.click()}>Import .json</button>
-        <button
-          type="button"
-          onClick={() => window.open("/print", "_blank", "noopener,noreferrer")}
-        >
-          Print Preview
-        </button>
-
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/json"
-          style={{ display: "none" }}
-          onChange={async (e) => {
-            const input = e.currentTarget;
-            const f = input.files?.[0];
-            if (!f) return;
-            const imported = await readJsonFile(f);
-            setDoc({ ...imported, updatedAt: new Date().toISOString() });
-            setLastLoaded(f.name);
-            input.value = "";
-          }}
-        />
-      </div>
-
-      {lastLoaded ? (
-        <p style={{ margin: "0 0 16px", opacity: 0.8 }}>
-          Loaded: <strong>{lastLoaded}</strong>
-        </p>
-      ) : (
-        <div style={{ marginBottom: 16 }} />
-      )}
-
-      <label style={{ display: "block", marginBottom: 12 }}>
-        Title:{" "}
-        <input
-          value={doc.title}
-          onChange={(e) =>
-            setDoc({ ...doc, title: e.target.value, updatedAt: new Date().toISOString() })
-          }
-        />
-      </label>
-
-      <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
-        <label>
-          Original key:{" "}
-          <select
-            value={doc.originalKey}
-            onChange={(e) =>
-              setDoc({ ...doc, originalKey: e.target.value, updatedAt: new Date().toISOString() })
-            }
-          >
-            {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
-          </select>
-        </label>
-
-        <label>
-          Display key:{" "}
-          <select
-            value={doc.displayKey}
-            onChange={(e) =>
-              setDoc({ ...doc, displayKey: e.target.value, updatedAt: new Date().toISOString() })
-            }
-          >
-            {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
-          </select>
-        </label>
-
-        <span style={{ opacity: 0.75 }}>(transpose: +{delta} semitones)</span>
-      </div>
-
-      <label style={{ display: "block", marginBottom: 12 }}>
-        Beats per bar:{" "}
-        <input
-          type="number"
-          min={1}
-          value={doc.timeSignature.beatsPerBar}
-          onChange={(e) =>
-            setDoc({
-              ...doc,
-              timeSignature: {
-                ...doc.timeSignature,
-                beatsPerBar: Math.max(1, Number(e.target.value || 4)),
-              },
-              updatedAt: new Date().toISOString(),
-            })
-          }
-          style={{ width: 80 }}
-        />
-      </label>
-
-      <label style={{ display: "block", marginBottom: 12 }}>
-        Subdivision (cells per beat):{" "}
-        <input
-          type="number"
-          min={1}
-          value={doc.subdivision}
-          onChange={(e) =>
-            setDoc({
-              ...doc,
-              subdivision: Math.max(1, Number(e.target.value || 1)),
-              updatedAt: new Date().toISOString(),
-            })
-          }
-          style={{ width: 80 }}
-        />{" "}
-        <span style={{ opacity: 0.75 }}>(1 = beats, 2 = eighths, 4 = sixteenths...)</span>
-      </label>
-
-      {/* Chord hotbar */}
-      <div
-        style={{
-          marginBottom: 14,
-          padding: 12,
-          borderRadius: 10,
-          border: "1px solid rgba(255,255,255,0.12)",
-          background: "rgba(255,255,255,0.06)",
-        }}
-      >
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ fontWeight: 700 }}>Chord hotbar</div>
-          {armedChord ? (
-            <div style={{ opacity: 0.9 }}>
-              Armed: <strong>{armedChord}</strong>{" "}
-              <span style={{ opacity: 0.75 }}>(click grid to place • Esc to clear)</span>
+    <div className="appShell">
+      {/* Sticky top settings bar */}
+      <header className="topBar">
+        <div className="topBarInner">
+          <div className="topRow">
+            <div className="brand">
+              <h1>Proportional Notation Creator</h1>
+              <span className="sub">Editor</span>
             </div>
-          ) : (
-            <div style={{ opacity: 0.75 }}>
-              Click a chord below (or press 1–9) then click the grid to place.
+
+            <div className="actions">
+              <button onClick={() => downloadJson(doc, doc.title)}>Export</button>
+              <button onClick={() => fileRef.current?.click()}>Import</button>
+              <button
+                type="button"
+                onClick={() => window.open("/print", "_blank", "noopener,noreferrer")}
+              >
+                Print Preview
+              </button>
+
+              <input
+                ref={fileRef}
+                type="file"
+                accept="application/json"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const input = e.currentTarget;
+                  const f = input.files?.[0];
+                  if (!f) return;
+                  const imported = await readJsonFile(f);
+                  setDoc({ ...imported, updatedAt: new Date().toISOString() });
+                  setLastLoaded(f.name);
+                  input.value = "";
+                }}
+              />
             </div>
-          )}
+          </div>
+
+          <div className="settingsRow">
+            <div className="field" style={{ minWidth: 220 }}>
+              <div className="fieldLabel">Title</div>
+              <input
+                value={doc.title}
+                onChange={(e) =>
+                  setDoc({ ...doc, title: e.target.value, updatedAt: new Date().toISOString() })
+                }
+              />
+            </div>
+
+            <div className="field">
+              <div className="fieldLabel">Original key</div>
+              <select
+                value={doc.originalKey}
+                onChange={(e) =>
+                  setDoc({ ...doc, originalKey: e.target.value, updatedAt: new Date().toISOString() })
+                }
+              >
+                {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="fieldLabel">Display key</div>
+              <select
+                value={doc.displayKey}
+                onChange={(e) =>
+                  setDoc({ ...doc, displayKey: e.target.value, updatedAt: new Date().toISOString() })
+                }
+              >
+                {KEYS.map((k) => <option key={k} value={k}>{k}</option>)}
+              </select>
+            </div>
+
+            <div className="field">
+              <div className="fieldLabel">Beats / bar</div>
+              <input
+                type="number"
+                min={1}
+                value={doc.timeSignature.beatsPerBar}
+                onChange={(e) =>
+                  setDoc({
+                    ...doc,
+                    timeSignature: {
+                      ...doc.timeSignature,
+                      beatsPerBar: Math.max(1, Number(e.target.value || 4)),
+                    },
+                    updatedAt: new Date().toISOString(),
+                  })
+                }
+                style={{ width: 110 }}
+              />
+            </div>
+
+            <div className="field">
+              <div className="fieldLabel">Subdivision</div>
+              <input
+                type="number"
+                min={1}
+                value={doc.subdivision}
+                onChange={(e) =>
+                  setDoc({
+                    ...doc,
+                    subdivision: Math.max(1, Number(e.target.value || 1)),
+                    updatedAt: new Date().toISOString(),
+                  })
+                }
+                style={{ width: 110 }}
+              />
+            </div>
+
+            <div className="spacer" />
+
+            <div className="muted">
+              transpose: {delta >= 0 ? `+${delta}` : delta} semitones
+              {lastLoaded ? <> • loaded: <strong>{lastLoaded}</strong></> : null}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* Scrollable editor pane */}
+      <div className="content">
+        {/* Chord hotbar */}
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="cardHeader">
+            <div>
+              <div className="cardTitle">Chord tools</div>
+              <div className="kbdHint">
+                Press <strong>1–9</strong> to arm a recent chord • Press <strong>Esc</strong> to clear
+              </div>
+            </div>
+
+            <div className="row">
+              {armedLabel ? (
+                <span className="chip chipActive">Armed: <strong>{armedLabel}</strong></span>
+              ) : (
+                <span className="chip">Armed: <span style={{ opacity: 0.7 }}>none</span></span>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setArmedChord(DELETE_TOOL)}
+                className={armedChord === DELETE_TOOL ? "chip chipActive" : "chip"}
+                style={{ cursor: "pointer" }}
+                title="Click a beat to remove a chord"
+              >
+                ⌫ Delete chord
+              </button>
+
+              <button type="button" onClick={() => setArmedChord(null)} disabled={!armedChord}>
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div className="row" style={{ marginBottom: 10 }}>
+            <div className="row" style={{ gap: 8 }}>
+              {recentChords.length ? (
+                recentChords.map((sym, i) => {
+                  const active = sym === armedChord;
+                  return (
+                    <button
+                      key={`${sym}-${i}`}
+                      type="button"
+                      onClick={() => setArmedChord(sym)}
+                      title={`Press ${i + 1} to select`}
+                      className={active ? "chip chipActive" : "chip"}
+                    >
+                      <span style={{ opacity: 0.7, marginRight: 6 }}>{i + 1}</span>
+                      {sym}
+                    </button>
+                  );
+                })
+              ) : (
+                <span className="muted">No recent chords yet — place one to start.</span>
+              )}
+            </div>
+
+            <div className="spacer" />
+
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                value={chordQuickInput}
+                onChange={(e) => setChordQuickInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") armChordFromInput();
+                  if (e.key === "Escape") {
+                    setChordQuickInput("");
+                    setArmedChord(null);
+                  }
+                }}
+                placeholder="Type chord (e.g., F2, Gadd4)…"
+                style={{ width: 260, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}
+              />
+              <button type="button" onClick={armChordFromInput}>Arm</button>
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="fieldLabel">Chords (beats) — press Enter to apply • Esc to revert</div>
+            <input
+              value={chordDraft}
+              onChange={(e) => setChordDraft(e.target.value)}
+              onFocus={() => setChordDraft((prev) => (prev ? prev : chordStringFromDoc))}
+              onBlur={() => {
+                setChordDraft((prev) => (prev === chordStringFromDoc ? chordStringFromDoc : prev));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyChordDraft();
+                if (e.key === "Escape") setChordDraft(chordStringFromDoc);
+              }}
+              style={{
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                width: "100%",
+              }}
+            />
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {recentChords.length ? (
-              recentChords.map((sym, i) => {
-                const active = sym === armedChord;
-                return (
-                  <button
-                    key={`${sym}-${i}`}
-                    type="button"
-                    onClick={() => setArmedChord(sym)}
-                    title={`Press ${i + 1} to select`}
-                    style={{
-                      fontFamily: "system-ui",
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: active
-                        ? "1px solid rgba(255,255,255,0.70)"
-                        : "1px solid rgba(255,255,255,0.22)",
-                      background: active ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.25)",
-                      color: "#fff",
-                      cursor: "pointer",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <span style={{ opacity: 0.75, marginRight: 6 }}>{i + 1}</span>
-                    {sym}
-                  </button>
-                );
-              })
+        {/* Lyrics */}
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="cardHeader">
+            <div className="cardTitle">Lyrics</div>
+            <div className="row">
+              <button type="button" onClick={() => setLyricsOpen((v) => !v)}>
+                {lyricsOpen ? "Collapse" : "Expand"}
+              </button>
+
+              <button type="button" onClick={undoLastAnchor} disabled={!section.anchors.length}>
+                Undo last anchor
+              </button>
+
+              <span className="chip">
+                Anchors: <strong>{section.anchors.length}</strong>
+              </span>
+            </div>
+          </div>
+
+          {lyricsOpen ? (
+            <textarea
+              value={section.lyrics}
+              onChange={(e) => setLyrics(e.target.value)}
+              placeholder="Paste lyrics here…"
+              style={{ width: "100%", minHeight: 140 }}
+            />
+          ) : (
+            <div className="muted">
+              Lyrics hidden • {section.lyrics ? `${section.lyrics.split("\n").length} line(s)` : "empty"}
+            </div>
+          )}
+
+          <div className="muted" style={{ marginTop: 10 }}>
+            Workflow: <strong>Click word under bars → click beat above</strong>
+            {armedChord === DELETE_TOOL ? (
+              <> • Delete mode: <strong>click a beat to remove the chord</strong></>
+            ) : armedChord ? (
+              <> • Chord mode: <strong>{armedChord}</strong> armed</>
+            ) : selectedCharIndex !== null ? (
+              <> • Word selected — now click a beat</>
             ) : (
-              <span style={{ opacity: 0.7 }}>No recent chords yet — place one to start.</span>
+              <> • Select a word under a system, then click a beat</>
             )}
           </div>
-
-          <div style={{ flex: 1 }} />
-
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <input
-              value={chordQuickInput}
-              onChange={(e) => setChordQuickInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") armChordFromInput();
-                if (e.key === "Escape") {
-                  setChordQuickInput("");
-                  setArmedChord(null);
-                }
-              }}
-              placeholder="Type chord (e.g., F2, Gadd4)…"
-              style={{ width: 220, fontFamily: "monospace" }}
-            />
-            <button type="button" onClick={armChordFromInput}>Arm</button>
-            <button type="button" onClick={() => setArmedChord(null)} disabled={!armedChord}>
-              Clear
-            </button>
-          </div>
         </div>
-      </div>
 
-      {/* Chords input (synced to doc chords) */}
-      <div style={{ marginBottom: 16 }}>
-        <label style={{ display: "block", marginBottom: 6 }}>Chords (beats):</label>
-        <input
-          style={{ width: "100%", fontFamily: "monospace" }}
-          value={chordDraft}
-          onChange={(e) => setChordDraft(e.target.value)}
-          onFocus={() => {
-            setChordDraft((prev) => (prev ? prev : chordStringFromDoc));
-          }}
-          onBlur={() => {
-            setChordDraft((prev) => (prev === chordStringFromDoc ? chordStringFromDoc : prev));
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") applyChordDraft();
-            if (e.key === "Escape") setChordDraft(chordStringFromDoc);
-          }}
+        {/* Main editor grid (this is now the "main" scroll content) */}
+        <LeadSheetGrid
+          mode="editor"
+          chords={displayChords}
+          timeSignature={doc.timeSignature}
+          subdivision={doc.subdivision}
+          lyrics={section.lyrics}
+          anchors={section.anchors}
+          selectedCharIndex={selectedCharIndex}
+          onSelectCharIndex={setSelectedCharIndex}
+          onBeatClick={onBeatClick}
+          barsPerSystem={3}
         />
-        <small style={{ opacity: 0.8 }}>Press Enter to apply • Esc to revert</small>
       </div>
-
-      <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
-        <div style={{ fontWeight: 700 }}>Lyrics (paste here)</div>
-        <textarea
-          value={section.lyrics}
-          onChange={(e) => setLyrics(e.target.value)}
-          placeholder="Each lyric line will render under each system of bars."
-          style={{
-            width: "100%",
-            minHeight: 120,
-            padding: 10,
-            borderRadius: 8,
-            fontFamily: "system-ui",
-          }}
-        />
-        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <button type="button" onClick={undoLastAnchor} disabled={!section.anchors.length}>
-            Undo last anchor
-          </button>
-          <span style={{ opacity: 0.8 }}>
-            Anchors: <strong>{section.anchors.length}</strong>
-          </span>
-          <span style={{ opacity: 0.8 }}>
-            Workflow: <strong>Click word under bars → click beat above</strong>
-          </span>
-
-          {armedChord ? (
-            <span style={{ opacity: 0.9 }}>
-              Chord mode: <strong>{armedChord}</strong> armed — click the grid to place (Esc to clear).
-            </span>
-          ) : selectedCharIndex !== null ? (
-            <span style={{ opacity: 0.9 }}>Word selected — now click a beat.</span>
-          ) : (
-            <span style={{ opacity: 0.75 }}>Select a word under a system, then click a beat.</span>
-          )}
-        </div>
-      </div>
-
-      <LeadSheetGrid
-        mode="editor"
-        chords={displayChords}
-        timeSignature={doc.timeSignature}
-        subdivision={doc.subdivision}
-        lyrics={section.lyrics}
-        anchors={section.anchors}
-        selectedCharIndex={selectedCharIndex}
-        onSelectCharIndex={setSelectedCharIndex}
-        onBeatClick={onBeatClick}
-        barsPerSystem={3}
-      />
-    </main>
+    </div>
   );
 }
